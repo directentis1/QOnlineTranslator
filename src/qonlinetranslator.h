@@ -186,7 +186,8 @@ public:
         Yandex,
         Bing,
         LibreTranslate,
-        Lingva
+        Lingva,
+        DeepLX
     };
     Q_ENUM(Engine)
 
@@ -430,7 +431,7 @@ public:
     /**
      * @brief Set the URL engine
      *
-     * Only affects LibreTranslate and Lingva because these engines have multiple instances.
+     * Only affects LibreTranslate, Lingva and DeepLX because these engines have multiple instances (self-hosted).
      * You need to call this function to specify the URL of an instance for them.
      *
      * @param engine engine
@@ -441,7 +442,7 @@ public:
     /**
      * @brief Set api key for engine
      *
-     * Affects only LibreTranslate.
+     * Affects LibreTranslate and DeepLX (used as a bearer token if the DeepLX/DLX instance was started with `-token`).
      *
      * @param engine engine
      * @param apiKey your key for this particular instance
@@ -537,6 +538,10 @@ private slots:
     void requestLingvaTranslate();
     void parseLingvaTranslate();
 
+    // DeepLX
+    void requestDeepLXTranslate();
+    void parseDeepLXTranslate();
+
 private:
     /*
      * Engines have translation limit, so need to split all text into parts and make request sequentially.
@@ -557,6 +562,9 @@ private:
 
     void buildLingvaStateMachine();
     void buildLingvaDetectStateMachine();
+
+    void buildDeepLXStateMachine();
+    void buildDeepLXDetectStateMachine();
 
     // Helper functions to build nested states
     void buildSplitNetworkRequest(QState *parent, void (QOnlineTranslator::*requestMethod)(), void (QOnlineTranslator::*parseMethod)(), const QString &text, int textLimit);
@@ -606,6 +614,7 @@ private:
     static constexpr int s_yandexTranslitLimit = 180;
     static constexpr int s_bingTranslateLimit = 502;
     static constexpr int s_libreTranslateLimit = 120;
+    static constexpr int s_deeplxTranslateLimit = 5000;
 
     QStateMachine *m_stateMachine;
     QNetworkAccessManager *m_networkManager;
@@ -627,6 +636,8 @@ private:
     QByteArray m_libreApiKey; // Can be empty, since free instances ignores api_key param
     QString m_libreUrl;
     QString m_lingvaUrl;
+    QString m_deeplxUrl;
+    QByteArray m_deeplxApiKey; // Bearer token, can be empty if the instance wasn't started with -token
 
     QMap<QString, QVector<QOption>> m_translationOptions;
     QMap<QString, QVector<QExample>> m_examples;

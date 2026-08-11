@@ -242,6 +242,15 @@ void QOnlineTranslator::translate(const QString &text, Engine engine, Language t
 
         buildLingvaStateMachine();
         break;
+    case DeepLX:
+        if (m_deeplxUrl.isEmpty()) {
+            resetData(ParametersError, tr("%1 URL can't be empty.").arg(QMetaEnum::fromType<Engine>().valueToKey(engine)));
+            emit finished();
+            return;
+        }
+
+        buildDeepLXStateMachine();
+        break;
     }
 
     m_stateMachine->start();
@@ -285,6 +294,15 @@ void QOnlineTranslator::detectLanguage(const QString &text, Engine engine)
         }
 
         buildLingvaDetectStateMachine();
+        break;
+    case DeepLX:
+        if (m_deeplxUrl.isEmpty()) {
+            resetData(ParametersError, tr("%1 URL can't be empty.").arg(QMetaEnum::fromType<Engine>().valueToKey(engine)));
+            emit finished();
+            return;
+        }
+
+        buildDeepLXDetectStateMachine();
         break;
     }
 
@@ -457,6 +475,9 @@ void QOnlineTranslator::setEngineUrl(Engine engine, QString url)
     case Lingva:
         m_lingvaUrl = qMove(url);
         break;
+    case DeepLX:
+        m_deeplxUrl = qMove(url);
+        break;
     default:
         break;
     }
@@ -467,6 +488,9 @@ void QOnlineTranslator::setEngineApiKey(Engine engine, QByteArray apiKey)
     switch (engine) {
     case LibreTranslate:
         m_libreApiKey = qMove(apiKey);
+        break;
+    case DeepLX:
+        m_deeplxApiKey = qMove(apiKey);
         break;
     default:
         break;
@@ -1191,6 +1215,53 @@ bool QOnlineTranslator::isSupportTranslation(Engine engine, Language lang)
             break;
         }
         break;
+    case DeepLX:
+        // DeepL only supports a fixed, fairly small list of languages, unlike the other
+        // engines above. So instead of blacklisting unsupported ones, we whitelist the
+        // ones DeepL actually supports. Update this list if DeepL adds more languages.
+        switch (lang) {
+        case Auto:
+        case Arabic:
+        case Bulgarian:
+        case Czech:
+        case Danish:
+        case German:
+        case Greek:
+        case English:
+        case Spanish:
+        case Estonian:
+        case Finnish:
+        case French:
+        case Hebrew:
+        case Hungarian:
+        case Indonesian:
+        case Italian:
+        case Japanese:
+        case Korean:
+        case Lithuanian:
+        case Latvian:
+        case Norwegian:
+        case Dutch:
+        case Polish:
+        case Portuguese:
+        case Romanian:
+        case Russian:
+        case Slovak:
+        case Slovenian:
+        case Swedish:
+        case Thai:
+        case Turkish:
+        case Ukrainian:
+        case Vietnamese:
+        case SimplifiedChinese:
+        case TraditionalChinese:
+            isSupported = true;
+            break;
+        default:
+            isSupported = false;
+            break;
+        }
+        break;
     }
 
     return isSupported;
@@ -1770,6 +1841,65 @@ void QOnlineTranslator::parseLingvaTranslate()
     }
 }
 
+void QOnlineTranslator::requestDeepLXTranslate()
+{
+    const QString sourceText = sender()->property(s_textProperty).toString();
+
+    // Generate JSON payload
+    QJsonObject payload{
+        {QStringLiteral("text"), sourceText},
+        {QStringLiteral("target_lang"), languageApiCode(DeepLX, m_translationLang)}};
+
+    // Only send source_lang if it's not auto-detect, so DeepLX can detect it for us
+    if (m_sourceLang != Auto)
+        payload.insert(QStringLiteral("source_lang"), languageApiCode(DeepLX, m_sourceLang));
+
+    // Setup request
+    QNetworkRequest request;
+    request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
+    request.setUrl(m_deeplxUrl + "/translate");
+    if (!m_deeplxApiKey.isEmpty())
+        request.setRawHeader("Authorization", "Bearer " + m_deeplxApiKey);
+
+    // Make reply
+    m_currentReply = m_networkManager->post(request, QJsonDocument(payload).toJson(QJsonDocument::Compact));
+}
+
+void QOnlineTranslator::parseDeepLXTranslate()
+{
+    m_currentReply->deleteLater();
+
+    // Check for network errors
+    if (m_currentReply->error() != QNetworkReply::NoError) {
+        resetData(NetworkError, m_currentReply->errorString());
+        return;
+    }
+
+    const QJsonDocument jsonResponse = QJsonDocument::fromJson(m_currentReply->readAll());
+    const QJsonObject responseObject = jsonResponse.object();
+
+    // DeepLX reports errors via a "code" field (e.g. 429, 500) rather than the HTTP status alone
+    const int code = responseObject.value(QStringLiteral("code")).toInt();
+    if (code != 200) {
+        const QString message = responseObject.value(QStringLiteral("message")).toString();
+        resetData(ServiceError, message.isEmpty() ? tr("Error: DeepLX returned code %1").arg(code) : message);
+        return;
+    }
+
+    if (m_sourceLang == Auto) {
+        const QString langCode = responseObject.value(QStringLiteral("source_lang")).toString();
+        m_sourceLang = language(DeepLX, langCode);
+        if (m_sourceLang == NoLanguage) {
+            resetData(ParsingError, tr("Error: Unable to parse autodetected language"));
+            return;
+        }
+        if (m_onlyDetectLanguage)
+            return;
+    }
+
+    m_translation += responseObject.value(QStringLiteral("data")).toString();
+}
+
 void QOnlineTranslator::buildGoogleStateMachine()
 {
     // States (Google sends translation, translit and dictionary in one request, that will be splitted into several by the translation limit)
@@ -1955,6 +2085,34 @@ void QOnlineTranslator::buildLingvaDetectStateMachine()
     buildNetworkRequestState(detectState, &QOnlineTranslator::requestLingvaTranslate, &QOnlineTranslator::parseLingvaTranslate, text);
 }
 
+void QOnlineTranslator::buildDeepLXStateMachine()
+{
+    // States
+    auto *translationState = new QState(m_stateMachine);
+    auto *finalState = new QFinalState(m_stateMachine);
+    m_stateMachine->setInitialState(translationState);
+
+    // Transitions
+    translationState->addTransition(translationState, &QState::finished, finalState);
+
+    // Setup translation state
+    buildSplitNetworkRequest(translationState, &QOnlineTranslator::requestDeepLXTranslate, &QOnlineTranslator::parseDeepLXTranslate, m_source, s_deeplxTranslateLimit);
+}
+
+void QOnlineTranslator::buildDeepLXDetectStateMachine()
+{
+    // States
+    auto *detectState = new QState(m_stateMachine);
+    auto *finalState = new QFinalState(m_stateMachine);
+    m_stateMachine->setInitialState(detectState);
+
+    detectState->addTransition(detectState, &QState::finished, finalState);
+
+    // Setup detect state
+    const QString text = m_source.left(getSplitIndex(m_source, s_deeplxTranslateLimit));
+    buildNetworkRequestState(detectState, &QOnlineTranslator::requestDeepLXTranslate, &QOnlineTranslator::parseDeepLXTranslate, text);
+}
+
 void QOnlineTranslator::buildSplitNetworkRequest(QState *parent, void (QOnlineTranslator::*requestMethod)(), void (QOnlineTranslator::*parseMethod)(), const QString &text, int textLimit)
 {
     QString unsendedText = text;
@@ -2121,6 +2279,7 @@ bool QOnlineTranslator::isSupportTranslit(Engine engine, Language lang)
             return false;
         }
     case LibreTranslate: // LibreTranslate doesn't support translit
+    case DeepLX: // DeepLX doesn't support translit
         return false;
     }
 
@@ -2384,6 +2543,7 @@ bool QOnlineTranslator::isSupportDictionary(Engine engine, Language sourceLang, 
         }
     case LibreTranslate: // LibreTranslate doesn't support dictinaries
     case Lingva: // Although Lingvo is a frontend to Google Translate, it doesn't support dictionaries
+    case DeepLX: // DeepLX doesn't support dictionaries
         return false;
     }
 
@@ -2407,6 +2567,9 @@ QString QOnlineTranslator::languageApiCode(Engine engine, Language lang)
         return s_genericLanguageCodes.value(lang);
     case Lingva:
         return s_lingvaLanguageCodes.value(lang, s_genericLanguageCodes.value(lang));
+    case DeepLX:
+        // DeepL's API uses upper-case ISO codes (e.g. "EN", "DE", "ZH")
+        return s_genericLanguageCodes.value(lang).toUpper();
     }
 
     Q_UNREACHABLE();
@@ -2427,6 +2590,8 @@ QOnlineTranslator::Language QOnlineTranslator::language(Engine engine, const QSt
         return s_genericLanguageCodes.key(langCode, NoLanguage);
     case Lingva:
         return s_lingvaLanguageCodes.key(langCode, s_genericLanguageCodes.key(langCode, NoLanguage));
+    case DeepLX:
+        return s_genericLanguageCodes.key(langCode.toLower(), NoLanguage);
     }
 
     Q_UNREACHABLE();

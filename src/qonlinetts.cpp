@@ -133,6 +133,7 @@ void QOnlineTts::generateUrls(const QString &text, QOnlineTranslator::Engine eng
     case QOnlineTranslator::Bing:
     case QOnlineTranslator::LibreTranslate:
     case QOnlineTranslator::Lingva:
+    case QOnlineTranslator::DeepLX:
         // NOTE:
         // Lingva returns audio in strange format, use placeholder, until we'll figure it out
         //
