@@ -2132,7 +2132,7 @@ void QOnlineTranslator::requestDeepLXFreeTranslate()
         {QStringLiteral("text"), QJsonArray{sourceText}}};
 
     // Setup request
-    QNetworkRequest request(QUrl(QStringLiteral("https://oneshot-free.www.deeplx.com/v1/storefront/translate")));
+    QNetworkRequest request(QUrl(QStringLiteral("https://oneshot-free.www.deepl.com/v1/storefront/translate")));
     request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
     request.setRawHeader("Accept", "*/*");
 
