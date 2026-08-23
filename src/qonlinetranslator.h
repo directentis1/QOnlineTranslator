@@ -23,7 +23,9 @@
 #include "qexample.h"
 #include "qoption.h"
 
+#include <QLocale>
 #include <QMap>
+#include <QPair>
 #include <QPointer>
 #include <QUuid>
 #include <QVector>
@@ -451,6 +453,59 @@ public:
     void setEngineApiKey(Engine engine, QByteArray apiKey);
 
     /**
+     * @brief Set custom HTTP headers for engine
+     *
+     * Currently affects only DeepLXFree. Useful for supplying browser-like fingerprinting
+     * headers (User-Agent, sec-fetch-*, etc.) if the endpoint ever starts requiring them,
+     * without hardcoding anything that might need to change on short notice.
+     * Headers set here are applied after (and can override) the request's default headers.
+     *
+     * @param engine engine
+     * @param headers map of header name to header value
+     */
+    void setEngineHeaders(Engine engine, const QMap<QString, QString> &headers);
+
+    /**
+     * @brief Set preferred regional variants for translation targets
+     *
+     * Some engines (currently DeepLX and DeepLXFree) support translating *into* a specific
+     * regional variant of a language instead of the generic one - e.g. American vs. British
+     * English, Brazilian vs. European Portuguese. This has no effect on languages/engines that
+     * don't have such a distinction, and has no effect on source-language detection (only DeepL's
+     * *target* language accepts regional codes; the source is always the generic code).
+     *
+     * Example:
+     * @code
+     * QOnlineTranslator translator;
+     * translator.setLanguageRegions({{QOnlineTranslator::English, QLocale::UnitedKingdom}});
+     * translator.translate("Hello", QOnlineTranslator::DeepLXFree, QOnlineTranslator::English); // Translates to British English
+     * @endcode
+     *
+     * @param regions map of language to preferred regional variant
+     * @sa validLanguageRegions()
+     */
+    void setLanguageRegions(const QMap<Language, QLocale::Country> &regions);
+
+    /**
+     * @brief Currently set regional variant preferences
+     *
+     * @return regional variant preferences
+     * @sa setLanguageRegions()
+     */
+    const QMap<Language, QLocale::Country> &languageRegions() const;
+
+    /**
+     * @brief Valid regional variants per language
+     *
+     * Languages not present in this map don't have distinct regional variants (as far as DeepL
+     * is concerned) - translating to them always uses the generic code.
+     *
+     * @return a map, with key being language enum and value a list of valid regional variants
+     * @sa setLanguageRegions()
+     */
+    static const QMap<Language, QList<QLocale::Country>> &validLanguageRegions();
+
+    /**
      * @brief Language name
      *
      * @param lang language
@@ -590,6 +645,7 @@ private:
 
     // Other
     static QString languageApiCode(Engine engine, Language lang);
+    QString regionalLanguageApiCode(Engine engine, Language lang) const;
     static Language language(Engine engine, const QString &langCode);
     static int getSplitIndex(const QString &untranslatedText, int limit);
     static bool isContainsSpace(const QString &text);
@@ -603,6 +659,8 @@ private:
     static const QMap<Language, QString> s_bingLanguageCodes;
     static const QMap<Language, QString> s_lingvaLanguageCodes;
     static const QMap<Language, QString> s_deeplxFreeLanguageCodes;
+    static const QMap<QPair<Language, QLocale::Country>, QString> s_deeplRegionalCodes;
+    static const QMap<Language, QList<QLocale::Country>> s_deeplValidRegions;
 
     // Yandex require a random UUID to be generated
     static inline QByteArray s_yandexUcid = QUuid::createUuid().toByteArray(QUuid::Id128);
@@ -648,6 +706,8 @@ private:
     QString m_lingvaUrl;
     QString m_deeplxUrl;
     QByteArray m_deeplxApiKey; // Bearer token, can be empty if the instance wasn't started with -token
+    QMap<QString, QString> m_deeplxFreeHeaders; // Custom HTTP headers, empty by default
+    QMap<Language, QLocale::Country> m_languageRegions; // Preferred regional variants (DeepLX/DeepLXFree targets only)
 
     QMap<QString, QVector<QOption>> m_translationOptions;
     QMap<QString, QVector<QExample>> m_examples;

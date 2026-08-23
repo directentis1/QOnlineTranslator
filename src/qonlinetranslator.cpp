@@ -186,6 +186,51 @@ const QMap<QOnlineTranslator::Language, QString> QOnlineTranslator::s_deeplxFree
     {SimplifiedChinese, QStringLiteral("zh-hans")},
     {TraditionalChinese, QStringLiteral("zh-hant")}};
 
+// Regional variants DeepL accepts as a *target* language (never as source - DeepL only ever
+// detects/accepts the generic code for source). Applies to both DeepLX and DeepLXFree, since
+// both are DeepL-family engines using the same code scheme.
+const QMap<QPair<QOnlineTranslator::Language, QLocale::Country>, QString> QOnlineTranslator::s_deeplRegionalCodes = {
+    {{English, QLocale::UnitedStates}, QStringLiteral("EN-US")},
+    {{English, QLocale::UnitedKingdom}, QStringLiteral("EN-GB")},
+    {{French, QLocale::Canada}, QStringLiteral("FR-CA")},
+    {{French, QLocale::France}, QStringLiteral("FR-FR")},
+    {{German, QLocale::Germany}, QStringLiteral("DE-DE")},
+    {{German, QLocale::Switzerland}, QStringLiteral("DE-CH")},
+    {{Portuguese, QLocale::Brazil}, QStringLiteral("PT-BR")},
+    {{Portuguese, QLocale::Portugal}, QStringLiteral("PT-PT")},
+    // DeepL's "ES-419" stands for Latin American Spanish as a whole (there's no single ISO
+    // country for it, so it's mapped from a handful of representative countries here - extend
+    // this list with any other QLocale::Country you want to trigger it).
+    {{Spanish, QLocale::Mexico}, QStringLiteral("ES-419")},
+    {{Spanish, QLocale::Argentina}, QStringLiteral("ES-419")},
+    {{Spanish, QLocale::Colombia}, QStringLiteral("ES-419")},
+    {{Spanish, QLocale::Chile}, QStringLiteral("ES-419")},
+    {{Spanish, QLocale::Peru}, QStringLiteral("ES-419")},
+    {{Spanish, QLocale::Venezuela}, QStringLiteral("ES-419")},
+    {{Spanish, QLocale::Ecuador}, QStringLiteral("ES-419")},
+    {{Spanish, QLocale::Guatemala}, QStringLiteral("ES-419")},
+    {{Spanish, QLocale::Cuba}, QStringLiteral("ES-419")},
+    {{Spanish, QLocale::Bolivia}, QStringLiteral("ES-419")},
+    {{Spanish, QLocale::DominicanRepublic}, QStringLiteral("ES-419")},
+    {{Spanish, QLocale::Honduras}, QStringLiteral("ES-419")},
+    {{Spanish, QLocale::Paraguay}, QStringLiteral("ES-419")},
+    {{Spanish, QLocale::ElSalvador}, QStringLiteral("ES-419")},
+    {{Spanish, QLocale::Nicaragua}, QStringLiteral("ES-419")},
+    {{Spanish, QLocale::CostaRica}, QStringLiteral("ES-419")},
+    {{Spanish, QLocale::Panama}, QStringLiteral("ES-419")},
+    {{Spanish, QLocale::Uruguay}, QStringLiteral("ES-419")},
+    {{Spanish, QLocale::PuertoRico}, QStringLiteral("ES-419")}};
+
+const QMap<QOnlineTranslator::Language, QList<QLocale::Country>> QOnlineTranslator::s_deeplValidRegions = {
+    {English, {QLocale::UnitedStates, QLocale::UnitedKingdom}},
+    {French, {QLocale::Canada, QLocale::France}},
+    {German, {QLocale::Germany, QLocale::Switzerland}},
+    {Portuguese, {QLocale::Brazil, QLocale::Portugal}},
+    {Spanish, {QLocale::Spain, QLocale::Mexico, QLocale::Argentina, QLocale::Colombia, QLocale::Chile, QLocale::Peru, QLocale::Venezuela,
+               QLocale::Ecuador, QLocale::Guatemala, QLocale::Cuba, QLocale::Bolivia, QLocale::DominicanRepublic, QLocale::Honduras,
+               QLocale::Paraguay, QLocale::ElSalvador, QLocale::Nicaragua, QLocale::CostaRica, QLocale::Panama, QLocale::Uruguay,
+               QLocale::PuertoRico}}};
+
 QOnlineTranslator::QOnlineTranslator(QObject *parent)
     : QObject(parent)
     , m_stateMachine(new QStateMachine(this))
@@ -510,6 +555,46 @@ void QOnlineTranslator::setEngineApiKey(Engine engine, QByteArray apiKey)
     default:
         break;
     }
+}
+
+void QOnlineTranslator::setEngineHeaders(Engine engine, const QMap<QString, QString> &headers)
+{
+    switch (engine) {
+    case DeepLXFree:
+        m_deeplxFreeHeaders = headers;
+        break;
+    default:
+        break;
+    }
+}
+
+void QOnlineTranslator::setLanguageRegions(const QMap<Language, QLocale::Country> &regions)
+{
+    m_languageRegions = regions;
+}
+
+const QMap<QOnlineTranslator::Language, QLocale::Country> &QOnlineTranslator::languageRegions() const
+{
+    return m_languageRegions;
+}
+
+const QMap<QOnlineTranslator::Language, QList<QLocale::Country>> &QOnlineTranslator::validLanguageRegions()
+{
+    return s_deeplValidRegions;
+}
+
+QString QOnlineTranslator::regionalLanguageApiCode(Engine engine, Language lang) const
+{
+    if (engine == DeepLX || engine == DeepLXFree) {
+        const auto it = m_languageRegions.constFind(lang);
+        if (it != m_languageRegions.constEnd()) {
+            const QString regionalCode = s_deeplRegionalCodes.value({lang, it.value()});
+            if (!regionalCode.isEmpty())
+                return regionalCode;
+        }
+    }
+
+    return languageApiCode(engine, lang);
 }
 
 QString QOnlineTranslator::languageName(Language lang)
@@ -1968,7 +2053,7 @@ void QOnlineTranslator::requestDeepLXTranslate()
     // Generate JSON payload
     QJsonObject payload{
         {QStringLiteral("text"), sourceText},
-        {QStringLiteral("target_lang"), languageApiCode(DeepLX, m_translationLang)}};
+        {QStringLiteral("target_lang"), regionalLanguageApiCode(DeepLX, m_translationLang)}};
 
     // Only send source_lang if it's not auto-detect, so DeepLX can detect it for us
     if (m_sourceLang != Auto)
@@ -2035,7 +2120,7 @@ void QOnlineTranslator::requestDeepLXFreeTranslate()
         return localeCode;
     };
 
-    const QString targetCode = toLocaleCode(languageApiCode(DeepLXFree, m_translationLang));
+    const QString targetCode = toLocaleCode(regionalLanguageApiCode(DeepLXFree, m_translationLang));
     const QString sourceCode = m_sourceLang == Auto ? QStringLiteral("auto") : toLocaleCode(languageApiCode(DeepLXFree, m_sourceLang));
 
     // Generate JSON payload
@@ -2047,9 +2132,15 @@ void QOnlineTranslator::requestDeepLXFreeTranslate()
         {QStringLiteral("text"), QJsonArray{sourceText}}};
 
     // Setup request
-    QNetworkRequest request(QUrl(QStringLiteral("https://oneshot-free.www.deepl.com/v1/storefront/translate")));
+    QNetworkRequest request(QUrl(QStringLiteral("https://oneshot-free.www.deeplx.com/v1/storefront/translate")));
     request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
     request.setRawHeader("Accept", "*/*");
+
+    // Apply any user-configured custom headers, e.g. browser fingerprinting headers
+    // (User-Agent, sec-fetch-*, etc.), in case the endpoint ever starts requiring them.
+    // These are applied last so they can override the defaults above too, if needed.
+    for (auto it = m_deeplxFreeHeaders.cbegin(); it != m_deeplxFreeHeaders.cend(); ++it)
+        request.setRawHeader(it.key().toUtf8(), it.value().toUtf8());
 
     // Make reply
     m_currentReply = m_networkManager->post(request, QJsonDocument(payload).toJson(QJsonDocument::Compact));
