@@ -187,7 +187,8 @@ public:
         Bing,
         LibreTranslate,
         Lingva,
-        DeepLX
+        DeepLX,
+        DeepLXFree
     };
     Q_ENUM(Engine)
 
@@ -542,6 +543,10 @@ private slots:
     void requestDeepLXTranslate();
     void parseDeepLXTranslate();
 
+    // DeepLXFree
+    void requestDeepLXFreeTranslate();
+    void parseDeepLXFreeTranslate();
+
 private:
     /*
      * Engines have translation limit, so need to split all text into parts and make request sequentially.
@@ -565,6 +570,9 @@ private:
 
     void buildDeepLXStateMachine();
     void buildDeepLXDetectStateMachine();
+
+    void buildDeepLXFreeStateMachine();
+    void buildDeepLXFreeDetectStateMachine();
 
     // Helper functions to build nested states
     void buildSplitNetworkRequest(QState *parent, void (QOnlineTranslator::*requestMethod)(), void (QOnlineTranslator::*parseMethod)(), const QString &text, int textLimit);
@@ -594,6 +602,7 @@ private:
     static const QMap<Language, QString> s_yandexLanguageCodes;
     static const QMap<Language, QString> s_bingLanguageCodes;
     static const QMap<Language, QString> s_lingvaLanguageCodes;
+    static const QMap<Language, QString> s_deeplxFreeLanguageCodes;
 
     // Yandex require a random UUID to be generated
     static inline QByteArray s_yandexUcid = QUuid::createUuid().toByteArray(QUuid::Id128);
@@ -615,6 +624,7 @@ private:
     static constexpr int s_bingTranslateLimit = 502;
     static constexpr int s_libreTranslateLimit = 120;
     static constexpr int s_deeplxTranslateLimit = 5000;
+    static constexpr int s_deeplxFreeTranslateLimit = 1500; // Confirmed by the server's own "text_character_limit" error field
 
     QStateMachine *m_stateMachine;
     QNetworkAccessManager *m_networkManager;
