@@ -177,18 +177,14 @@ const QMap<QOnlineTranslator::Language, QString> QOnlineTranslator::s_lingvaLang
     {SimplifiedChinese, QStringLiteral("zh")},
     {TraditionalChinese, QStringLiteral("zh_HANT")}};
 
-// Language codes that differ from the generic (Google-style) ones, for DeepL-family engines.
-// Shared by both DeepLX and DeepLXFree - they use the same underlying DeepL language codes,
-// only the wire *casing* differs between them (handled separately in each engine's request
-// builder), not the codes themselves.
-const QMap<QOnlineTranslator::Language, QString> QOnlineTranslator::s_deeplLanguageCodes = {
-    {Kurdish, QStringLiteral("KMR")},
-    {Norwegian, QStringLiteral("NB")},
-    {SerbianCyrillic, QStringLiteral("SR")},
-    {SerbianLatin, QStringLiteral("SR")},
-    {Cantonese, QStringLiteral("YUE")},
-    {SimplifiedChinese, QStringLiteral("ZH-HANS")},
-    {TraditionalChinese, QStringLiteral("ZH-HANT")}};
+const QMap<QOnlineTranslator::Language, QString> QOnlineTranslator::s_deeplxFreeLanguageCodes = {
+    {Kurdish, QStringLiteral("kmr")},
+    {Norwegian, QStringLiteral("nb")},
+    {SerbianCyrillic, QStringLiteral("sr")},
+    {SerbianLatin, QStringLiteral("sr")},
+    {Cantonese, QStringLiteral("yue")},
+    {SimplifiedChinese, QStringLiteral("zh-hans")},
+    {TraditionalChinese, QStringLiteral("zh-hant")}};
 
 // Regional variants DeepL accepts as a *target* language (never as source - DeepL only ever
 // detects/accepts the generic code for source). Applies to both DeepLX and DeepLXFree, since
@@ -2117,6 +2113,9 @@ void QOnlineTranslator::requestDeepLXFreeTranslate()
     // all-upper-case codes ("DE", "EN-US") languageApiCode() normally returns for DeepL engines,
     // so convert to that casing here rather than baking it into the shared code table.
     auto toLocaleCode = [](const QString &code) {
+        if (!code.contains(QLatin1Char('-')))
+            return code.toLower();
+
         const QStringList parts = code.split(QLatin1Char('-'));
         QString localeCode = parts.constFirst().toLower();
         if (parts.size() > 1) {
@@ -2902,10 +2901,11 @@ QString QOnlineTranslator::languageApiCode(Engine engine, Language lang)
     case Lingva:
         return s_lingvaLanguageCodes.value(lang, s_genericLanguageCodes.value(lang));
     case DeepLX:
+        // DeepL's API uses lower-case ISO codes (e.g. "EN", "DE", "ZH")
+        return s_genericLanguageCodes.value(lang).toLoweer();
     case DeepLXFree:
-        // DeepL's API uses upper-case ISO codes (e.g. "EN", "DE", "ZH-HANS"); a handful of
-        // languages need a code that differs from the generic (Google-style) one entirely
-        return s_deeplLanguageCodes.value(lang, s_genericLanguageCodes.value(lang)).toUpper();
+        // A handful of languages use codes that differ from the generic (Google-style) ones
+        return s_deeplxFreeLanguageCodes.value(lang, s_genericLanguageCodes.value(lang)).toUpper();
     }
 
     Q_UNREACHABLE();
@@ -2927,8 +2927,9 @@ QOnlineTranslator::Language QOnlineTranslator::language(Engine engine, const QSt
     case Lingva:
         return s_lingvaLanguageCodes.key(langCode, s_genericLanguageCodes.key(langCode, NoLanguage));
     case DeepLX:
+        return s_genericLanguageCodes.key(langCode.toLower(), NoLanguage);
     case DeepLXFree:
-        return s_deeplLanguageCodes.key(langCode.toUpper(), s_genericLanguageCodes.key(langCode.toLower(), NoLanguage));
+        return s_deeplxFreeLanguageCodes.key(langCode.toUpper(), s_genericLanguageCodes.key(langCode.toLower(), NoLanguage));
     }
 
     Q_UNREACHABLE();

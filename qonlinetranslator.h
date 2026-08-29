@@ -658,7 +658,7 @@ private:
     static const QMap<Language, QString> s_yandexLanguageCodes;
     static const QMap<Language, QString> s_bingLanguageCodes;
     static const QMap<Language, QString> s_lingvaLanguageCodes;
-    static const QMap<Language, QString> s_deeplLanguageCodes;
+    static const QMap<Language, QString> s_deeplxFreeLanguageCodes;
     static const QMap<QPair<Language, QLocale::Country>, QString> s_deeplRegionalCodes;
     static const QMap<Language, QList<QLocale::Country>> s_deeplValidRegions;
 

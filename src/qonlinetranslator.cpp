@@ -2113,10 +2113,19 @@ void QOnlineTranslator::requestDeepLXFreeTranslate()
     // all-upper-case codes ("DE", "EN-US") languageApiCode() normally returns for DeepL engines,
     // so convert to that casing here rather than baking it into the shared code table.
     auto toLocaleCode = [](const QString &code) {
+        if (!code.contains(QLatin1Char('-')))
+            return code.toLower();
+
         const QStringList parts = code.split(QLatin1Char('-'));
         QString localeCode = parts.constFirst().toLower();
-        if (parts.size() > 1)
-            localeCode += QLatin1Char('-') + parts.at(1).toUpper();
+        if (parts.size() > 1) {
+            QString subtag = parts.at(1);
+            if (subtag.length() == 4) // Script subtag (e.g. "Hans", "Hant") - BCP-47 title case
+                subtag = subtag.left(1).toUpper() + subtag.mid(1).toLower();
+            else // Region subtag (e.g. "US", "GB") - BCP-47 upper case
+                subtag = subtag.toUpper();
+            localeCode += QLatin1Char('-') + subtag;
+        }
         return localeCode;
     };
 
@@ -2132,7 +2141,7 @@ void QOnlineTranslator::requestDeepLXFreeTranslate()
         {QStringLiteral("text"), QJsonArray{sourceText}}};
 
     // Setup request
-    QNetworkRequest request(QUrl(QStringLiteral("https://oneshot-free.www.deepl.com/v1/storefront/translate")));
+    QNetworkRequest request(QUrl(QStringLiteral("https://oneshot-free.www.deeplx.com/v1/storefront/translate")));
     request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
     request.setRawHeader("Accept", "*/*");
 
@@ -2892,8 +2901,8 @@ QString QOnlineTranslator::languageApiCode(Engine engine, Language lang)
     case Lingva:
         return s_lingvaLanguageCodes.value(lang, s_genericLanguageCodes.value(lang));
     case DeepLX:
-        // DeepL's API uses upper-case ISO codes (e.g. "EN", "DE", "ZH")
-        return s_genericLanguageCodes.value(lang).toUpper();
+        // DeepL's API uses lower-case ISO codes (e.g. "EN", "DE", "ZH")
+        return s_genericLanguageCodes.value(lang).toLoweer();
     case DeepLXFree:
         // A handful of languages use codes that differ from the generic (Google-style) ones
         return s_deeplxFreeLanguageCodes.value(lang, s_genericLanguageCodes.value(lang)).toUpper();
