@@ -2902,7 +2902,7 @@ QString QOnlineTranslator::languageApiCode(Engine engine, Language lang)
         return s_lingvaLanguageCodes.value(lang, s_genericLanguageCodes.value(lang));
     case DeepLX:
         // DeepL's API uses lower-case ISO codes (e.g. "EN", "DE", "ZH")
-        return s_genericLanguageCodes.value(lang).toLoweer();
+        return s_genericLanguageCodes.value(lang).toLower();
     case DeepLXFree:
         // A handful of languages use codes that differ from the generic (Google-style) ones
         return s_deeplxFreeLanguageCodes.value(lang, s_genericLanguageCodes.value(lang)).toUpper();
