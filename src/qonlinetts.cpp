@@ -196,6 +196,23 @@ const QMap<QOnlineTranslator::Language, QList<QLocale::Country>> &QOnlineTts::va
     return s_validRegions;
 }
 
+bool QOnlineTts::isSupportTts(QOnlineTranslator::Engine engine)
+{
+    switch (engine) {
+    case QOnlineTranslator::Google:
+    case QOnlineTranslator::Yandex:
+        return true;
+    case QOnlineTranslator::Bing:
+    case QOnlineTranslator::LibreTranslate:
+    case QOnlineTranslator::Lingva:
+    case QOnlineTranslator::DeepLX:
+    case QOnlineTranslator::DeepLXFree:
+        return false;
+    }
+
+    return false;
+}
+
 void QOnlineTts::setError(TtsError error, const QString &errorString)
 {
     m_error = error;

@@ -213,6 +213,18 @@ public:
     static const QMap<QOnlineTranslator::Language, QList<QLocale::Country>> &validRegions();
 
     /**
+     * @brief Check if an engine supports TTS at all
+     *
+     * Translation-only engines (Bing, LibreTranslate, Lingva, DeepLX, DeepLXFree, ...) never
+     * generate audio; this lets UI code filter which engines are offered as a "speech engine"
+     * independently of whichever engine is currently selected for translation.
+     *
+     * @param engine engine
+     * @return `true` if generateUrls() can produce audio for this engine
+     */
+    static bool isSupportTts(QOnlineTranslator::Engine engine);
+
+    /**
      * @brief region preferences
      * @return region preferences
      */
