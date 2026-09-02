@@ -1820,19 +1820,42 @@ void QOnlineTranslator::parseBingTranslate()
         return;
     }
 
-    // Parse translation data
+    // Parse translation data.
+    //
+    // Bing's two possible shapes for this endpoint:
+    //  - success: a JSON *array* containing a single translation object
+    //      [{"translations":[{"text":"...","to":"fr"}],"detectedLanguage":{"language":"en"}}]
+    //  - failure: a JSON *object* with statusCode/errorMessage
+    //      {"statusCode":400,"errorMessage":"..."}
+    //
+    // NOTE: QJsonDocument::object() on a document that actually holds an array does NOT fail,
+    // it silently returns an empty QJsonObject. Calling .value("statusCode") on that empty
+    // object then yields QJsonValue::Undefined, and QJsonValue::isNull() is only true for
+    // QJsonValue::Null (not Undefined) - so the old "!isNull()" check was always true and every
+    // successful reply was misreported as "Bing return unhandled network error". Check
+    // jsonResponse.isObject() first so we only take the error branch when Bing actually sent us
+    // an error object.
     const QJsonDocument jsonResponse = QJsonDocument::fromJson(m_currentReply->readAll());
-    const QJsonObject responseObject = jsonResponse.array().first().toObject();
 
-    if (!jsonResponse.object().value(QStringLiteral("statusCode")).isNull()) {
-        const QString errorMessage = jsonResponse.object().value(QStringLiteral("errorMessage")).toString();
+    if (jsonResponse.isObject()) {
+        const QJsonValue statusCode = jsonResponse.object().value(QStringLiteral("statusCode"));
+        if (!statusCode.isUndefined() && !statusCode.isNull()) {
+            const QString errorMessage = jsonResponse.object().value(QStringLiteral("errorMessage")).toString();
 
-        if (!errorMessage.isEmpty())
-            resetData(ServiceError, errorMessage);
-        else
-            resetData(ServiceError, tr("Error: Bing return unhandled network error"));
+            if (!errorMessage.isEmpty())
+                resetData(ServiceError, errorMessage);
+            else
+                resetData(ServiceError, tr("Error: Bing return unhandled network error"));
+            return;
+        }
+    }
+
+    if (!jsonResponse.isArray() || jsonResponse.array().isEmpty()) {
+        resetData(ServiceError, tr("Error: Bing return unhandled network error"));
         return;
     }
+
+    const QJsonObject responseObject = jsonResponse.array().first().toObject();
 
     if (m_sourceLang == Auto) {
         const QString langCode = responseObject.value(QStringLiteral("detectedLanguage")).toObject().value(QStringLiteral("language")).toString();
