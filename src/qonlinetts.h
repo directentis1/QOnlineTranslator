@@ -24,6 +24,8 @@
 
 #include <QLocale>
 #include <QMediaContent>
+#include <QNetworkAccessManager>
+#include <QTemporaryFile>
 
 /**
  * @brief Provides TTS URL generation
@@ -94,7 +96,11 @@ public:
         /** Unsupported voice by specified engine */
         UnsupportedVoice,
         /** Unsupported emotion by specified engine */
-        UnsupportedEmotion
+        UnsupportedEmotion,
+        /** Network error while talking to a TTS backend that needs live requests (currently only Bing) */
+        NetworkError,
+        /** The TTS backend returned a response that could not be understood (e.g. Bing changed its page/API) */
+        ServiceError
     };
 
     /**
@@ -237,21 +243,73 @@ public:
     void setRegions(const QMap<QOnlineTranslator::Language, QLocale::Country> &newRegionPreferences);
 
 private:
+    /**
+     * @brief Per-language voice data needed to build a Bing/Azure Speech SSML request
+     */
+    struct BingVoiceData {
+        QString locale; // e.g. "en-US"
+        QString gender; // "Male" or "Female"
+        QString name; // e.g. "en-US-AriaNeural"
+    };
+
     void setError(TtsError error, const QString &errorString);
 
     QString languageApiCode(QOnlineTranslator::Engine engine, QOnlineTranslator::Language lang);
     QString voiceApiCode(QOnlineTranslator::Engine engine, Voice voice);
     QString emotionApiCode(QOnlineTranslator::Engine engine, Emotion emotion);
 
+    // Bing (Microsoft Translator's "tfettts" endpoint, the same one the web version of
+    // Bing Translator uses - there is no official/documented public API for it)
+    void generateBingUrls(const QString &text, QOnlineTranslator::Language lang);
+    bool ensureBingCredentials();
+    QByteArray postBingSpeech(const QByteArray &requestBody);
+    static QVector<QString> splitTextForBing(const QString &text);
+    static QByteArray buildBingSsml(const QString &text, const BingVoiceData &voice);
+    static bool bingVoiceData(QOnlineTranslator::Language lang, BingVoiceData &voice);
+
     static const QMap<Emotion, QString> s_emotionCodes;
     static const QMap<Voice, QString> s_voiceCodes;
     static const QMap<QPair<QOnlineTranslator::Language, QLocale::Country>, QString> s_regionCodes;
     static const QMap<QOnlineTranslator::Language, QList<QLocale::Country>> s_validRegions;
+    static const QMap<QOnlineTranslator::Language, BingVoiceData> s_bingVoices;
+
+    // Credentials scraped from the Bing Translator webpage, shared by every QOnlineTts instance
+    // in the process (mirrors how QOnlineTranslator caches its own copy of the same credentials
+    // for text translation). Kept independent from QOnlineTranslator's copy so this class has no
+    // dependency on a QOnlineTranslator instance/internals, at the cost of a second, short-lived
+    // fetch the first time each is used.
+    static inline QByteArray s_bingKey;
+    static inline QByteArray s_bingToken;
+    static inline QString s_bingIg;
+    static inline QString s_bingIid;
+    static inline qint64 s_bingCredentialsTimestamp = 0;
+    static inline int s_bingRequestCounter = 0;
 
     QMap<QOnlineTranslator::Language, QLocale::Country> m_regionPreferences;
 
+    // Lazily created; only Bing needs to talk to the network directly (Google/Yandex just hand
+    // back plain GET URLs for the media player to fetch itself, see generateUrls())
+    QNetworkAccessManager *m_networkManager = nullptr;
+
+    // Bing has no public streamable URL - audio has to be fetched via a POST request and handed
+    // to the player as a local file. These are parented to `this` so they live (and get cleaned
+    // up) exactly as long as the QOnlineTts instance does, and are explicitly cleared at the top
+    // of every generateUrls() call. IMPORTANT: this means whoever calls generateUrls() for Bing
+    // must keep the QOnlineTts instance alive for as long as playback lasts, and must not
+    // destroy/replace it before the *next* generateUrls() call - a fresh, short-lived QOnlineTts
+    // per speak request will have its temp files deleted (instance destroyed) before QMediaPlayer
+    // gets a chance to play them. SpeakButtons keeps one QOnlineTts per SpeakButtons instance for
+    // exactly this reason.
+    QVector<QTemporaryFile *> m_bingAudioFiles;
+
     static constexpr int s_googleTtsLimit = 200;
     static constexpr int s_yandexTtsLimit = 1400;
+
+    // Bing's web frontend keeps each chunk under ~170 characters, splitting only on word
+    // boundaries (falling back to a hard split for single words longer than that). Ported from
+    // TranslateWebPage's textToSpeech.js so behavior matches the reference implementation.
+    static constexpr int s_bingTtsSoftLimit = 170;
+    static constexpr int s_bingTtsHardWordLimit = 160;
 
     QList<QMediaContent> m_media;
     QString m_errorString;
