@@ -28,6 +28,7 @@
 #include <QJsonObject>
 #include <QMediaPlayer>
 #include <QNetworkReply>
+#include <QRegularExpression>
 #include <QStateMachine>
 
 const QMap<QOnlineTranslator::Language, QString> QOnlineTranslator::s_genericLanguageCodes = {
@@ -1480,6 +1481,7 @@ void QOnlineTranslator::skipGarbageText()
 void QOnlineTranslator::requestGoogleTranslate()
 {
     const QString sourceText = sender()->property(s_textProperty).toString();
+    m_googleFallbackText = sourceText; // in case parseGoogleTranslate() needs to fall back to translateHtml
 
     // Generate API url
     QUrl url(QStringLiteral("https://translate.googleapis.com/translate_a/single"));
@@ -1495,17 +1497,22 @@ void QOnlineTranslator::parseGoogleTranslate()
 
     // Check for error
     if (m_currentReply->error() != QNetworkReply::NoError) {
-        if (m_currentReply->error() == QNetworkReply::ServiceUnavailableError)
-            resetData(ServiceError, tr("Error: Engine systems have detected suspicious traffic from your computer network. Please try your request again later."));
-        else
+        if (m_currentReply->error() == QNetworkReply::ServiceUnavailableError) {
+            // translate_a/single looks blocked (rate-limited / flagged as suspicious traffic).
+            // Don't fail outright - resolveGoogleFallbackDecision() will retry this chunk via
+            // the translateHtml fallback instead.
+            m_googleFallbackNeeded = true;
+        } else {
             resetData(NetworkError, m_currentReply->errorString());
+        }
         return;
     }
 
     // Check availability of service
     const QByteArray data = m_currentReply->readAll();
     if (data.startsWith('<')) {
-        resetData(ServiceError, tr("Error: Engine systems have detected suspicious traffic from your computer network. Please try your request again later."));
+        // Same situation as above (Google returned an HTML block page instead of JSON) - fall back.
+        m_googleFallbackNeeded = true;
         return;
     }
 
@@ -1573,6 +1580,168 @@ void QOnlineTranslator::parseGoogleTranslate()
             }
         }
     }
+}
+
+void QOnlineTranslator::buildGoogleTranslationState(QState *parent, const QString &text)
+{
+    // Unlike buildNetworkRequestState(), the parsing state below does NOT get an automatic
+    // transition to the final state pre-wired. Instead it always advances to decisionState,
+    // which resolveGoogleFallbackDecision() resolves at runtime: either straight to the final
+    // state (the normal case), or into a dynamically-built translateHtml fallback chain (see
+    // buildGoogleFallbackChain()) when parseGoogleTranslate() flagged m_googleFallbackNeeded.
+    auto *requestingState = new QState(parent);
+    auto *parsingState = new QState(parent);
+    auto *decisionState = new QState(parent);
+
+    parent->setInitialState(requestingState);
+
+    requestingState->addTransition(m_networkManager, &QNetworkAccessManager::finished, parsingState);
+    parsingState->addTransition(decisionState); // automatic, always runs after parsing
+
+    requestingState->setProperty(s_textProperty, text);
+    connect(requestingState, &QState::entered, this, &QOnlineTranslator::requestGoogleTranslate);
+    connect(parsingState, &QState::entered, this, &QOnlineTranslator::parseGoogleTranslate);
+    connect(decisionState, &QState::entered, this, &QOnlineTranslator::resolveGoogleFallbackDecision);
+}
+
+void QOnlineTranslator::resolveGoogleFallbackDecision()
+{
+    auto *state = qobject_cast<QState *>(sender());
+    QState *parent = state->parentState();
+
+    if (!m_googleFallbackNeeded) {
+        state->addTransition(new QFinalState(parent));
+        return;
+    }
+
+    m_googleFallbackNeeded = false;
+    buildGoogleFallbackChain(state, parent);
+}
+
+void QOnlineTranslator::buildGoogleFallbackChain(QState *from, QState *parent)
+{
+    // Only fetch the config/key once per process (cached in s_googleHtmlApiKey), same pattern
+    // as the Bing credentials.
+    if (s_googleHtmlApiKey.isEmpty()) {
+        auto *configState = new QState(parent);
+        auto *translateState = new QState(parent);
+
+        from->addTransition(configState);
+        buildNetworkRequestState(configState, &QOnlineTranslator::requestGoogleFallbackConfig, &QOnlineTranslator::parseGoogleFallbackConfig);
+        configState->addTransition(configState, &QState::finished, translateState);
+        buildNetworkRequestState(translateState, &QOnlineTranslator::requestGoogleFallbackTranslate, &QOnlineTranslator::parseGoogleFallbackTranslate, m_googleFallbackText);
+        translateState->addTransition(translateState, &QState::finished, new QFinalState(parent));
+    } else {
+        auto *translateState = new QState(parent);
+
+        from->addTransition(translateState);
+        buildNetworkRequestState(translateState, &QOnlineTranslator::requestGoogleFallbackTranslate, &QOnlineTranslator::parseGoogleFallbackTranslate, m_googleFallbackText);
+        translateState->addTransition(translateState, &QState::finished, new QFinalState(parent));
+    }
+}
+
+void QOnlineTranslator::requestGoogleFallbackConfig()
+{
+    // This is Chrome's own internal "translate page" config bundle, which is where the
+    // X-Goog-Api-Key used by translateHtml comes from. NOTE: the k=/rs= segments are versioned
+    // build hashes that Google rotates over time; if this ever starts 404ing, recapture the
+    // request from a Chrome devtools Network tab on translate.google.com (or any page using
+    // Chrome's built-in translate) and update this URL.
+    const QUrl url(QStringLiteral("https://translate.googleapis.com/_/translate_http/_/js/"
+                                   "k=translate_http.tr.en_US.YusFYy3P_ro.O/am=AAg/d=1/exm=el_conf/ed=1/"
+                                   "rs=AN8SPfq1Hb8iJRleQqQc8zhdzXmF9E56eQ/m=el_main"));
+
+    m_currentReply = m_networkManager->get(QNetworkRequest(url));
+}
+
+void QOnlineTranslator::parseGoogleFallbackConfig()
+{
+    m_currentReply->deleteLater();
+
+    if (m_currentReply->error() != QNetworkReply::NoError) {
+        resetData(NetworkError, m_currentReply->errorString());
+        return;
+    }
+
+    const QByteArray data = m_currentReply->readAll();
+    static const QRegularExpression keyRegex(QStringLiteral(R"re("X-goog-api-key"\s*:\s*"(AIzaSy[\w-]+)")re"), QRegularExpression::CaseInsensitiveOption);
+    const QRegularExpressionMatch match = keyRegex.match(QString::fromUtf8(data));
+
+    if (!match.hasMatch()) {
+        resetData(ParsingError, tr("Error: Unable to parse Google translateHtml API key"));
+        return;
+    }
+
+    s_googleHtmlApiKey = match.captured(1).toUtf8();
+}
+
+void QOnlineTranslator::requestGoogleFallbackTranslate()
+{
+    const QString sourceText = sender()->property(s_textProperty).toString();
+
+    // Payload shape (reverse-engineered from Chrome's built-in translate feature):
+    //   [[["<pre>ESCAPED_TEXT</pre>"], sourceLangCode, targetLangCode], "te"]
+    // The text is wrapped in <pre> so the endpoint treats it as opaque HTML rather than parsing
+    // it as markup, and Google echoes the same wrapper back around the translated text.
+    const QJsonArray body{QJsonArray{QJsonArray{QStringLiteral("<pre>%1</pre>").arg(sourceText.toHtmlEscaped())},
+                                      languageApiCode(Google, m_sourceLang),
+                                      languageApiCode(Google, m_translationLang)},
+                           QStringLiteral("te")};
+
+    QNetworkRequest request(QUrl(QStringLiteral("https://translate-pa.googleapis.com/v1/translateHtml")));
+    request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json+protobuf"));
+    request.setRawHeader("Origin", "chrome-extension://bolggfoncklhniejomgplkjcllmnonbh");
+    request.setRawHeader("X-Goog-Api-Key", s_googleHtmlApiKey);
+
+    m_currentReply = m_networkManager->post(request, QJsonDocument(body).toJson(QJsonDocument::Compact));
+}
+
+void QOnlineTranslator::parseGoogleFallbackTranslate()
+{
+    m_currentReply->deleteLater();
+
+    if (m_currentReply->error() != QNetworkReply::NoError) {
+        // The cached key may have been rotated/revoked server-side; drop it so the next
+        // translation attempt fetches a fresh one instead of failing forever.
+        if (m_currentReply->error() == QNetworkReply::AuthenticationRequiredError || m_currentReply->error() == QNetworkReply::ContentAccessDenied)
+            s_googleHtmlApiKey.clear();
+
+        resetData(NetworkError, m_currentReply->errorString());
+        return;
+    }
+
+    const QJsonDocument jsonResponse = QJsonDocument::fromJson(m_currentReply->readAll());
+    const QJsonArray jsonData = jsonResponse.array();
+    const QJsonArray translatedArray = jsonData.size() >= 1 ? jsonData.at(0).toArray() : QJsonArray();
+    const QJsonArray detectedLangArray = jsonData.size() >= 2 ? jsonData.at(1).toArray() : QJsonArray();
+    if (translatedArray.isEmpty()) {
+        resetData(ParsingError, tr("Error: Unable to parse translation response"));
+        return;
+    }
+
+    if (m_sourceLang == Auto) {
+        m_sourceLang = language(Google, detectedLangArray.isEmpty() ? QString() : detectedLangArray.at(0).toString());
+        if (m_sourceLang == NoLanguage) {
+            resetData(ParsingError, tr("Error: Unable to parse autodetected language"));
+            return;
+        }
+        if (m_onlyDetectLanguage)
+            return;
+    }
+
+    QString translatedHtml = translatedArray.at(0).toString();
+
+    // Strip the <pre>/</pre> wrapper we sent (Google echoes it back around the translation) and
+    // undo the HTML-escaping applied to the source text (see requestGoogleFallbackTranslate()).
+    if (translatedHtml.startsWith(QLatin1String("<pre>")) && translatedHtml.endsWith(QLatin1String("</pre>")))
+        translatedHtml = translatedHtml.mid(5, translatedHtml.size() - 5 - 6);
+    translatedHtml.replace(QLatin1String("&lt;"), QLatin1String("<"));
+    translatedHtml.replace(QLatin1String("&gt;"), QLatin1String(">"));
+    translatedHtml.replace(QLatin1String("&quot;"), QLatin1String("\""));
+    translatedHtml.replace(QLatin1String("&amp;"), QLatin1String("&"));
+
+    addSpaceBetweenParts(m_translation);
+    m_translation.append(translatedHtml);
 }
 
 void QOnlineTranslator::requestYandexTranslate()
@@ -2229,6 +2398,9 @@ void QOnlineTranslator::parseDeepLXFreeTranslate()
 void QOnlineTranslator::buildGoogleStateMachine()
 {
     // States (Google sends translation, translit and dictionary in one request, that will be splitted into several by the translation limit)
+    // Text is split the same way buildSplitNetworkRequest() does it for other engines, but each
+    // chunk is built with buildGoogleTranslationState() instead of the generic
+    // buildNetworkRequestState() so that a blocked chunk can retry via translateHtml.
     auto *translationState = new QState(m_stateMachine);
     auto *finalState = new QFinalState(m_stateMachine);
     m_stateMachine->setInitialState(translationState);
@@ -2236,7 +2408,31 @@ void QOnlineTranslator::buildGoogleStateMachine()
     translationState->addTransition(translationState, &QState::finished, finalState);
 
     // Setup translation state
-    buildSplitNetworkRequest(translationState, &QOnlineTranslator::requestGoogleTranslate, &QOnlineTranslator::parseGoogleTranslate, m_source, s_googleTranslateLimit);
+    QString unsendedText = m_source;
+    auto *nextChunkState = new QState(translationState);
+    translationState->setInitialState(nextChunkState);
+
+    while (!unsendedText.isEmpty()) {
+        auto *currentChunkState = nextChunkState;
+        nextChunkState = new QState(translationState);
+
+        // Do not translate the part if it looks like garbage
+        const int splitIndex = getSplitIndex(unsendedText, s_googleTranslateLimit);
+        if (splitIndex == -1) {
+            currentChunkState->setProperty(s_textProperty, unsendedText.left(s_googleTranslateLimit));
+            currentChunkState->addTransition(nextChunkState);
+            connect(currentChunkState, &QState::entered, this, &QOnlineTranslator::skipGarbageText);
+
+            unsendedText = unsendedText.mid(s_googleTranslateLimit);
+        } else {
+            buildGoogleTranslationState(currentChunkState, unsendedText.left(splitIndex));
+            currentChunkState->addTransition(currentChunkState, &QState::finished, nextChunkState);
+
+            unsendedText = unsendedText.mid(splitIndex);
+        }
+    }
+
+    nextChunkState->addTransition(new QFinalState(translationState));
 }
 
 void QOnlineTranslator::buildGoogleDetectStateMachine()
@@ -2250,7 +2446,7 @@ void QOnlineTranslator::buildGoogleDetectStateMachine()
 
     // Setup detect state
     const QString text = m_source.left(getSplitIndex(m_source, s_googleTranslateLimit));
-    buildNetworkRequestState(detectState, &QOnlineTranslator::requestGoogleTranslate, &QOnlineTranslator::parseGoogleTranslate, text);
+    buildGoogleTranslationState(detectState, text);
 }
 
 void QOnlineTranslator::buildYandexStateMachine()

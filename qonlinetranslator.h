@@ -561,6 +561,14 @@ private slots:
     void requestGoogleTranslate();
     void parseGoogleTranslate();
 
+    // Google fallback (translateHtml via translate-pa.googleapis.com), used only when
+    // translate_a/single is blocked. See buildGoogleTranslationState() for how this is wired in.
+    void resolveGoogleFallbackDecision();
+    void requestGoogleFallbackConfig();
+    void parseGoogleFallbackConfig();
+    void requestGoogleFallbackTranslate();
+    void parseGoogleFallbackTranslate();
+
     void requestYandexTranslate();
     void parseYandexTranslate();
 
@@ -633,6 +641,12 @@ private:
     void buildSplitNetworkRequest(QState *parent, void (QOnlineTranslator::*requestMethod)(), void (QOnlineTranslator::*parseMethod)(), const QString &text, int textLimit);
     void buildNetworkRequestState(QState *parent, void (QOnlineTranslator::*requestMethod)(), void (QOnlineTranslator::*parseMethod)(), const QString &text = {});
 
+    // Google translation state, split out from buildNetworkRequestState() because - unlike every
+    // other engine - it needs a runtime decision after parsing: retry via the translateHtml
+    // fallback, or finish normally. See resolveGoogleFallbackDecision() and buildGoogleFallbackChain().
+    void buildGoogleTranslationState(QState *parent, const QString &text);
+    void buildGoogleFallbackChain(QState *from, QState *parent);
+
     // Helper functions for transliteration
     void requestYandexTranslit(Language language);
     void parseYandexTranslit(QString &text);
@@ -671,6 +685,10 @@ private:
     static inline QString s_bingIg;
     static inline QString s_bingIid;
 
+    // API key for Google's translateHtml fallback endpoint, scraped from Google's config JS
+    // (see requestGoogleFallbackConfig()). Cached the same way as the Bing credentials above.
+    static inline QByteArray s_googleHtmlApiKey;
+
     // This properties used to store unseful information in states
     static constexpr char s_textProperty[] = "Text";
 
@@ -699,6 +717,12 @@ private:
     QString m_translation;
     QString m_translationTranslit;
     QString m_errorString;
+
+    // Set by parseGoogleTranslate() when translate_a/single looks blocked; consumed by
+    // resolveGoogleFallbackDecision() to decide whether to route into the translateHtml
+    // fallback chain. m_googleFallbackText carries the current chunk's text across into it.
+    bool m_googleFallbackNeeded = false;
+    QString m_googleFallbackText;
 
     // Self-hosted engines settings
     QByteArray m_libreApiKey; // Can be empty, since free instances ignores api_key param
