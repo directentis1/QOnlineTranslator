@@ -2339,11 +2339,23 @@ void QOnlineTranslator::buildBingStateMachine()
 void QOnlineTranslator::buildBingDetectStateMachine()
 {
     // States
+    auto *credentialsState = new QState(m_stateMachine); // Generate credentials from web version first to access API
     auto *detectState = new QState(m_stateMachine);
     auto *finalState = new QFinalState(m_stateMachine);
-    m_stateMachine->setInitialState(detectState);
+    m_stateMachine->setInitialState(credentialsState);
 
+    // Transitions
+    credentialsState->addTransition(credentialsState, &QState::finished, detectState);
     detectState->addTransition(detectState, &QState::finished, finalState);
+
+    // Setup credentials state. This mirrors buildBingStateMachine() above - without it, calling
+    // detectLanguage() with Bing before any full Bing translation has happened in this run (so
+    // s_bingKey/s_bingToken are still empty) sends requestBingTranslate() straight away with
+    // blank credentials (empty IG/IID/token/key), which Bing rejects with a 400.
+    if (s_bingKey.isEmpty() || s_bingToken.isEmpty())
+        buildNetworkRequestState(credentialsState, &QOnlineTranslator::requestBingCredentials, &QOnlineTranslator::parseBingCredentials);
+    else
+        credentialsState->setInitialState(new QFinalState(credentialsState));
 
     // Setup translation state
     const QString text = m_source.left(getSplitIndex(m_source, s_bingTranslateLimit));
