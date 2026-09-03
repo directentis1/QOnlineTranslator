@@ -677,8 +677,8 @@ void QOnlineTts::purgeExpiredBingAudio()
     // visited - every entry is still checked regardless of position, this isn't an early-exit.
     for (int i = m_bingAudioCacheOrder.size() - 1; i >= 0; --i) {
         const QString &key = m_bingAudioCacheOrder.at(i);
-        const auto it = m_bingAudioCache.constFind(key);
-        if (it == m_bingAudioCache.constEnd() || it.value().cachedAtMs > cutoff)
+        const auto it = m_bingAudioCache.find(key);
+        if (it == m_bingAudioCache.end() || it.value().cachedAtMs > cutoff)
             continue; // not expired (or already gone)
 
         delete it.value().file;
