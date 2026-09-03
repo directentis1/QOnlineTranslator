@@ -19,8 +19,15 @@
 
 #include "qonlinetts.h"
 
+#include <QDateTime>
+#include <QDir>
+#include <QEventLoop>
 #include <QMetaEnum>
+#include <QNetworkReply>
+#include <QNetworkRequest>
 #include <QUrl>
+#include <QtAlgorithms>
+#include <algorithm>
 
 const QMap<QOnlineTts::Emotion, QString> QOnlineTts::s_emotionCodes = {
     {Neutral, QStringLiteral("neutral")},
@@ -61,6 +68,78 @@ const QMap<QOnlineTranslator::Language, QList<QLocale::Country>> QOnlineTts::s_v
     {QOnlineTranslator::Spanish, {QLocale::Spain, QLocale::UnitedStates}},
     {QOnlineTranslator::Tamil, {QLocale::India}}};
 
+// clang-format off
+// Ported from TranslateWebPage's textToSpeech.js (BingHelper.getLanguageData()). Only languages
+// Bing's TTS actually supports appear here; anything else falls back to UnsupportedLanguage.
+// Note this is keyed by QOnlineTranslator::Language rather than the raw code strings the JS
+// source used, so no separate "which code alias means which language" table is needed here -
+// QOnlineTranslator::languageApiCode(Bing, ...) already resolves that ambiguity for us.
+const QMap<QOnlineTranslator::Language, QOnlineTts::BingVoiceData> QOnlineTts::s_bingVoices = {
+    {QOnlineTranslator::Afrikaans, {QStringLiteral("af-ZA"), QStringLiteral("Female"), QStringLiteral("af-ZA-AdriNeural")}},
+    {QOnlineTranslator::Amharic, {QStringLiteral("am-ET"), QStringLiteral("Female"), QStringLiteral("am-ET-MekdesNeural")}},
+    {QOnlineTranslator::Arabic, {QStringLiteral("ar-SA"), QStringLiteral("Male"), QStringLiteral("ar-SA-HamedNeural")}},
+    {QOnlineTranslator::Bengali, {QStringLiteral("bn-IN"), QStringLiteral("Female"), QStringLiteral("bn-IN-TanishaaNeural")}},
+    {QOnlineTranslator::Bulgarian, {QStringLiteral("bg-BG"), QStringLiteral("Male"), QStringLiteral("bg-BG-BorislavNeural")}},
+    {QOnlineTranslator::Catalan, {QStringLiteral("ca-ES"), QStringLiteral("Female"), QStringLiteral("ca-ES-JoanaNeural")}},
+    {QOnlineTranslator::Czech, {QStringLiteral("cs-CZ"), QStringLiteral("Male"), QStringLiteral("cs-CZ-AntoninNeural")}},
+    {QOnlineTranslator::Welsh, {QStringLiteral("cy-GB"), QStringLiteral("Female"), QStringLiteral("cy-GB-NiaNeural")}},
+    {QOnlineTranslator::Danish, {QStringLiteral("da-DK"), QStringLiteral("Female"), QStringLiteral("da-DK-ChristelNeural")}},
+    {QOnlineTranslator::German, {QStringLiteral("de-DE"), QStringLiteral("Female"), QStringLiteral("de-DE-KatjaNeural")}},
+    {QOnlineTranslator::Greek, {QStringLiteral("el-GR"), QStringLiteral("Male"), QStringLiteral("el-GR-NestorasNeural")}},
+    {QOnlineTranslator::English, {QStringLiteral("en-US"), QStringLiteral("Female"), QStringLiteral("en-US-AriaNeural")}},
+    {QOnlineTranslator::Spanish, {QStringLiteral("es-ES"), QStringLiteral("Female"), QStringLiteral("es-ES-ElviraNeural")}},
+    {QOnlineTranslator::Estonian, {QStringLiteral("et-EE"), QStringLiteral("Female"), QStringLiteral("et-EE-AnuNeural")}},
+    {QOnlineTranslator::Persian, {QStringLiteral("fa-IR"), QStringLiteral("Female"), QStringLiteral("fa-IR-DilaraNeural")}},
+    {QOnlineTranslator::Finnish, {QStringLiteral("fi-FI"), QStringLiteral("Female"), QStringLiteral("fi-FI-NooraNeural")}},
+    {QOnlineTranslator::French, {QStringLiteral("fr-FR"), QStringLiteral("Female"), QStringLiteral("fr-FR-DeniseNeural")}},
+    {QOnlineTranslator::Irish, {QStringLiteral("ga-IE"), QStringLiteral("Female"), QStringLiteral("ga-IE-OrlaNeural")}},
+    {QOnlineTranslator::Gujarati, {QStringLiteral("gu-IN"), QStringLiteral("Female"), QStringLiteral("gu-IN-DhwaniNeural")}},
+    {QOnlineTranslator::Hebrew, {QStringLiteral("he-IL"), QStringLiteral("Male"), QStringLiteral("he-IL-AvriNeural")}},
+    {QOnlineTranslator::Hindi, {QStringLiteral("hi-IN"), QStringLiteral("Female"), QStringLiteral("hi-IN-SwaraNeural")}},
+    {QOnlineTranslator::Croatian, {QStringLiteral("hr-HR"), QStringLiteral("Male"), QStringLiteral("hr-HR-SreckoNeural")}},
+    {QOnlineTranslator::Hungarian, {QStringLiteral("hu-HU"), QStringLiteral("Male"), QStringLiteral("hu-HU-TamasNeural")}},
+    {QOnlineTranslator::Indonesian, {QStringLiteral("id-ID"), QStringLiteral("Male"), QStringLiteral("id-ID-ArdiNeural")}},
+    {QOnlineTranslator::Icelandic, {QStringLiteral("is-IS"), QStringLiteral("Female"), QStringLiteral("is-IS-GudrunNeural")}},
+    {QOnlineTranslator::Italian, {QStringLiteral("it-IT"), QStringLiteral("Male"), QStringLiteral("it-IT-DiegoNeural")}},
+    {QOnlineTranslator::Japanese, {QStringLiteral("ja-JP"), QStringLiteral("Female"), QStringLiteral("ja-JP-NanamiNeural")}},
+    {QOnlineTranslator::Kazakh, {QStringLiteral("kk-KZ"), QStringLiteral("Female"), QStringLiteral("kk-KZ-AigulNeural")}},
+    {QOnlineTranslator::Khmer, {QStringLiteral("km-KH"), QStringLiteral("Female"), QStringLiteral("km-KH-SreymomNeural")}},
+    {QOnlineTranslator::Kannada, {QStringLiteral("kn-IN"), QStringLiteral("Female"), QStringLiteral("kn-IN-SapnaNeural")}},
+    {QOnlineTranslator::Korean, {QStringLiteral("ko-KR"), QStringLiteral("Female"), QStringLiteral("ko-KR-SunHiNeural")}},
+    {QOnlineTranslator::Lao, {QStringLiteral("lo-LA"), QStringLiteral("Female"), QStringLiteral("lo-LA-KeomanyNeural")}},
+    {QOnlineTranslator::Latvian, {QStringLiteral("lv-LV"), QStringLiteral("Female"), QStringLiteral("lv-LV-EveritaNeural")}},
+    {QOnlineTranslator::Lithuanian, {QStringLiteral("lt-LT"), QStringLiteral("Female"), QStringLiteral("lt-LT-OnaNeural")}},
+    {QOnlineTranslator::Macedonian, {QStringLiteral("mk-MK"), QStringLiteral("Female"), QStringLiteral("mk-MK-MarijaNeural")}},
+    {QOnlineTranslator::Malayalam, {QStringLiteral("ml-IN"), QStringLiteral("Female"), QStringLiteral("ml-IN-SobhanaNeural")}},
+    {QOnlineTranslator::Marathi, {QStringLiteral("mr-IN"), QStringLiteral("Female"), QStringLiteral("mr-IN-AarohiNeural")}},
+    {QOnlineTranslator::Malay, {QStringLiteral("ms-MY"), QStringLiteral("Male"), QStringLiteral("ms-MY-OsmanNeural")}},
+    {QOnlineTranslator::Maltese, {QStringLiteral("mt-MT"), QStringLiteral("Female"), QStringLiteral("mt-MT-GraceNeural")}},
+    {QOnlineTranslator::Myanmar, {QStringLiteral("my-MM"), QStringLiteral("Female"), QStringLiteral("my-MM-NilarNeural")}},
+    {QOnlineTranslator::Dutch, {QStringLiteral("nl-NL"), QStringLiteral("Female"), QStringLiteral("nl-NL-ColetteNeural")}},
+    {QOnlineTranslator::Norwegian, {QStringLiteral("nb-NO"), QStringLiteral("Female"), QStringLiteral("nb-NO-PernilleNeural")}},
+    {QOnlineTranslator::Polish, {QStringLiteral("pl-PL"), QStringLiteral("Female"), QStringLiteral("pl-PL-ZofiaNeural")}},
+    {QOnlineTranslator::Pashto, {QStringLiteral("ps-AF"), QStringLiteral("Female"), QStringLiteral("ps-AF-LatifaNeural")}},
+    {QOnlineTranslator::Portuguese, {QStringLiteral("pt-BR"), QStringLiteral("Female"), QStringLiteral("pt-BR-FranciscaNeural")}},
+    {QOnlineTranslator::Romanian, {QStringLiteral("ro-RO"), QStringLiteral("Male"), QStringLiteral("ro-RO-EmilNeural")}},
+    {QOnlineTranslator::Russian, {QStringLiteral("ru-RU"), QStringLiteral("Female"), QStringLiteral("ru-RU-DariyaNeural")}},
+    {QOnlineTranslator::Slovak, {QStringLiteral("sk-SK"), QStringLiteral("Male"), QStringLiteral("sk-SK-LukasNeural")}},
+    {QOnlineTranslator::Slovenian, {QStringLiteral("sl-SI"), QStringLiteral("Male"), QStringLiteral("sl-SI-RokNeural")}},
+    {QOnlineTranslator::SerbianCyrillic, {QStringLiteral("sr-RS"), QStringLiteral("Female"), QStringLiteral("sr-RS-SophieNeural")}},
+    {QOnlineTranslator::Swedish, {QStringLiteral("sv-SE"), QStringLiteral("Female"), QStringLiteral("sv-SE-SofieNeural")}},
+    {QOnlineTranslator::Tamil, {QStringLiteral("ta-IN"), QStringLiteral("Female"), QStringLiteral("ta-IN-PallaviNeural")}},
+    {QOnlineTranslator::Telugu, {QStringLiteral("te-IN"), QStringLiteral("Male"), QStringLiteral("te-IN-ShrutiNeural")}},
+    {QOnlineTranslator::Thai, {QStringLiteral("th-TH"), QStringLiteral("Male"), QStringLiteral("th-TH-NiwatNeural")}},
+    {QOnlineTranslator::Turkish, {QStringLiteral("tr-TR"), QStringLiteral("Female"), QStringLiteral("tr-TR-EmelNeural")}},
+    {QOnlineTranslator::Ukrainian, {QStringLiteral("uk-UA"), QStringLiteral("Female"), QStringLiteral("uk-UA-PolinaNeural")}},
+    {QOnlineTranslator::Urdu, {QStringLiteral("ur-IN"), QStringLiteral("Female"), QStringLiteral("ur-IN-GulNeural")}},
+    {QOnlineTranslator::Uzbek, {QStringLiteral("uz-UZ"), QStringLiteral("Female"), QStringLiteral("uz-UZ-MadinaNeural")}},
+    {QOnlineTranslator::Vietnamese, {QStringLiteral("vi-VN"), QStringLiteral("Male"), QStringLiteral("vi-VN-NamMinhNeural")}},
+    {QOnlineTranslator::SimplifiedChinese, {QStringLiteral("zh-CN"), QStringLiteral("Female"), QStringLiteral("zh-CN-XiaoxiaoNeural")}},
+    {QOnlineTranslator::TraditionalChinese, {QStringLiteral("zh-CN"), QStringLiteral("Female"), QStringLiteral("zh-CN-XiaoxiaoNeural")}},
+    {QOnlineTranslator::Cantonese, {QStringLiteral("zh-HK"), QStringLiteral("Female"), QStringLiteral("zh-HK-HiuGaaiNeural")}},
+};
+// clang-format on
+
 QOnlineTts::QOnlineTts(QObject *parent)
     : QObject(parent)
 {
@@ -68,6 +147,11 @@ QOnlineTts::QOnlineTts(QObject *parent)
 
 void QOnlineTts::generateUrls(const QString &text, QOnlineTranslator::Engine engine, QOnlineTranslator::Language lang, Voice voice, Emotion emotion)
 {
+    // Drop whatever the previous call put on the playlist - but NOT the Bing audio cache, which
+    // is deliberately kept across calls (see the m_bingAudioCache comment in the header).
+    m_media.clear();
+    setError(NoError, {});
+
     // Get speech
     QString unparsedText = text;
     switch (engine) {
@@ -130,7 +214,20 @@ void QOnlineTts::generateUrls(const QString &text, QOnlineTranslator::Engine eng
         }
         break;
     }
-    case QOnlineTranslator::Bing:
+    case QOnlineTranslator::Bing: {
+        if (voice != NoVoice) {
+            setError(UnsupportedVoice, tr("Selected engine %1 does not support voice settings").arg(QMetaEnum::fromType<QOnlineTranslator::Engine>().valueToKey(engine)));
+            return;
+        }
+
+        if (emotion != NoEmotion) {
+            setError(UnsupportedEmotion, tr("Selected engine %1 does not support emotion settings").arg(QMetaEnum::fromType<QOnlineTranslator::Engine>().valueToKey(engine)));
+            return;
+        }
+
+        generateBingUrls(text, lang);
+        break;
+    }
     case QOnlineTranslator::LibreTranslate:
     case QOnlineTranslator::Lingva:
     case QOnlineTranslator::DeepLX:
@@ -201,8 +298,8 @@ bool QOnlineTts::isSupportTts(QOnlineTranslator::Engine engine)
     switch (engine) {
     case QOnlineTranslator::Google:
     case QOnlineTranslator::Yandex:
-        return true;
     case QOnlineTranslator::Bing:
+        return true;
     case QOnlineTranslator::LibreTranslate:
     case QOnlineTranslator::Lingva:
     case QOnlineTranslator::DeepLX:
@@ -280,4 +377,312 @@ const QMap<QOnlineTranslator::Language, QLocale::Country> &QOnlineTts::regions()
 void QOnlineTts::setRegions(const QMap<QOnlineTranslator::Language, QLocale::Country> &newRegionPreferences)
 {
     m_regionPreferences = newRegionPreferences;
+}
+
+bool QOnlineTts::bingVoiceData(QOnlineTranslator::Language lang, BingVoiceData &voice)
+{
+    const auto it = s_bingVoices.constFind(lang);
+    if (it == s_bingVoices.constEnd())
+        return false;
+
+    voice = it.value();
+    return true;
+}
+
+// Bing's tfettts endpoint returned "500 Internal Server Error" for requests that were otherwise
+// well-formed but only carried a plain custom User-Agent - a request captured from an actual
+// Chrome tab (via Charles Proxy) with these headers succeeded. None of the values below need to
+// match a real, current Chrome install exactly - Bing doesn't appear to validate the version
+// number itself, just that the general shape of a browser request (Fetch Metadata headers,
+// Client Hints, a real-looking Accept/Accept-Language) is present.
+void QOnlineTts::setBingBrowserHeaders(QNetworkRequest &request)
+{
+    request.setHeader(QNetworkRequest::UserAgentHeader,
+                       QStringLiteral("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"));
+    request.setRawHeader("Accept", "*/*");
+    request.setRawHeader("Accept-Language", "en-US,en;q=0.9");
+    request.setRawHeader("sec-ch-ua", R"("Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99")");
+    request.setRawHeader("sec-ch-ua-mobile", "?0");
+    request.setRawHeader("sec-ch-ua-platform", "\"Windows\"");
+    request.setRawHeader("sec-fetch-dest", "empty");
+    request.setRawHeader("sec-fetch-mode", "cors");
+    request.setRawHeader("sec-fetch-site", "none");
+    request.setRawHeader("sec-fetch-storage-access", "active");
+    request.setRawHeader("priority", "u=1, i");
+}
+
+// Splits `text` the same way TranslateWebPage's textToSpeech.js does for Bing: collect words,
+// then greedily pack them into chunks kept under s_bingTtsSoftLimit characters, only ever
+// breaking a single word if that word alone is longer than s_bingTtsHardWordLimit.
+QVector<QString> QOnlineTts::splitTextForBing(const QString &text)
+{
+    QVector<QString> words;
+    for (QString word : text.trimmed().split(QLatin1Char(' '), Qt::SkipEmptyParts)) {
+        while (word.size() > s_bingTtsHardWordLimit) {
+            words.append(word.left(s_bingTtsHardWordLimit));
+            word = word.mid(s_bingTtsHardWordLimit);
+        }
+        if (!word.trimmed().isEmpty())
+            words.append(word);
+    }
+
+    QVector<QString> chunks;
+    QString chunk;
+    for (QString word : words) {
+        word += QLatin1Char(' ');
+        if (chunk.size() + word.size() < s_bingTtsSoftLimit) {
+            chunk += word;
+        } else {
+            chunks.append(chunk);
+            chunk = word;
+        }
+    }
+    if (!chunk.trimmed().isEmpty())
+        chunks.append(chunk);
+
+    return chunks;
+}
+
+QByteArray QOnlineTts::buildBingSsml(const QString &text, const BingVoiceData &voice)
+{
+    // Deliberately mirrors the exact SSML shape Bing's own web frontend sends - double-quoted
+    // attributes, and the voice name stuffed into a nonstandard `xml:name` attribute alongside an
+    // *empty* standard `name` attribute - rather than "corrected" spec-compliant SSML with the
+    // voice in `name` directly. That corrected version reliably got a 500 back from the tfettts
+    // endpoint (confirmed via Charles Proxy against a real browser request); whatever Bing's
+    // server does when it sees a populated `name` attribute, it doesn't like it, so don't give it
+    // one - just replicate the working request byte-for-byte instead of guessing why.
+    static const QString ssmlTemplate = QStringLiteral(
+        "<speak version=\"1.0\" xml:lang=\"%1\">"
+        "<voice xml:lang=\"%1\" xml:gender=\"%2\" name=\"\" xml:name=\"%3\">"
+        "<prosody rate=\"+0.00%\">%4</prosody>"
+        "</voice>"
+        "</speak>");
+
+    return ssmlTemplate.arg(voice.locale, voice.gender, voice.name, text.toHtmlEscaped()).toUtf8();
+}
+
+// Scrapes the IG/IID/key/token quadruplet that the Bing Translator webpage embeds in its own
+// HTML and that its JS then attaches to every translate/tts request as a lightweight anti-abuse
+// check. This is the exact same trick QOnlineTranslator::parseBingCredentials() uses for text
+// translation, kept as an independent copy here (see the comment above s_bingKey in the header
+// for why). Blocks with a nested event loop, matching the rest of this class's synchronous API.
+bool QOnlineTts::ensureBingCredentials()
+{
+    // Bing's own frontend treats these as valid for up to ~30 minutes; refetch a bit earlier
+    // to be safe.
+    constexpr qint64 credentialsTtlMs = 25 * 60 * 1000;
+    if (!s_bingKey.isEmpty() && !s_bingToken.isEmpty() && QDateTime::currentMSecsSinceEpoch() - s_bingCredentialsTimestamp < credentialsTtlMs)
+        return true;
+
+    if (!m_networkManager)
+        m_networkManager = new QNetworkAccessManager(this);
+
+    QNetworkRequest request{QUrl(QStringLiteral("https://www.bing.com/translator"))};
+    setBingBrowserHeaders(request);
+
+    QNetworkReply *reply = m_networkManager->get(request);
+    QEventLoop loop;
+    connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
+    loop.exec();
+    reply->deleteLater();
+
+    if (reply->error() != QNetworkReply::NoError) {
+        setError(NetworkError, reply->errorString());
+        return false;
+    }
+
+    const QByteArray webSiteData = reply->readAll();
+
+    const QByteArray abuseBeginString = "var params_AbusePreventionHelper = [";
+    const int credentialsBeginPos = webSiteData.indexOf(abuseBeginString);
+    if (credentialsBeginPos == -1) {
+        setError(ServiceError, tr("Error: Unable to find Bing credentials in web version."));
+        return false;
+    }
+
+    const int keyBeginPos = credentialsBeginPos + abuseBeginString.size();
+    const int keyEndPos = webSiteData.indexOf(',', keyBeginPos);
+    if (keyEndPos == -1) {
+        setError(ServiceError, tr("Error: Unable to extract Bing key from web version."));
+        return false;
+    }
+    const QByteArray key = webSiteData.mid(keyBeginPos, keyEndPos - keyBeginPos);
+
+    const int tokenBeginPos = keyEndPos + 2; // Skip two symbols instead of one because the value is enclosed in quotes
+    const int tokenEndPos = webSiteData.indexOf('"', tokenBeginPos);
+    if (tokenEndPos == -1) {
+        setError(ServiceError, tr("Error: Unable to extract Bing token from web version."));
+        return false;
+    }
+    const QByteArray token = webSiteData.mid(tokenBeginPos, tokenEndPos - tokenBeginPos);
+
+    const QByteArray igString = "IG:\"";
+    const int igBeginPos = webSiteData.indexOf(igString);
+    const int igEndPos = webSiteData.indexOf('"', igBeginPos + igString.size());
+    if (igBeginPos == -1 || igEndPos == -1) {
+        setError(ServiceError, tr("Error: Unable to extract additional Bing information from web version."));
+        return false;
+    }
+    const QString ig = QString::fromUtf8(webSiteData.mid(igBeginPos + igString.size(), igEndPos - (igBeginPos + igString.size())));
+
+    const QByteArray iidString = "data-iid=\"";
+    const int iidBeginPos = webSiteData.indexOf(iidString);
+    const int iidEndPos = webSiteData.indexOf('"', iidBeginPos + iidString.size());
+    if (iidBeginPos == -1 || iidEndPos == -1) {
+        setError(ServiceError, tr("Error: Unable to extract additional Bing information from web version."));
+        return false;
+    }
+    const QString iid = QString::fromUtf8(webSiteData.mid(iidBeginPos + iidString.size(), iidEndPos - (iidBeginPos + iidString.size())));
+
+    s_bingKey = key;
+    s_bingToken = token;
+    s_bingIg = ig;
+    s_bingIid = iid;
+    s_bingCredentialsTimestamp = QDateTime::currentMSecsSinceEpoch();
+    return true;
+}
+
+// Blocking POST to Bing's TTS endpoint. Returns the raw audio bytes, or an empty array on error
+// (with setError() already called).
+QByteArray QOnlineTts::postBingSpeech(const QByteArray &requestBody)
+{
+    // Built as a plain string rather than through QUrlQuery: a request captured from Bing's own
+    // web frontend has a literal "isVertical=1&&IG=..." (double ampersand, i.e. an empty query
+    // item between the two) - QUrlQuery would normalize that away, so this mirrors it exactly
+    // rather than risk the server caring about it.
+    const QUrl url(QStringLiteral("https://www.bing.com/tfettts?isVertical=1&&IG=%1&IID=%2.%3")
+                       .arg(s_bingIg, s_bingIid)
+                       // Bing's own frontend increments the trailing counter for every request
+                       // made in the same page session; mirror that instead of hardcoding ".1"
+                       // for every chunk.
+                       .arg(++s_bingRequestCounter));
+
+    QNetworkRequest request(url);
+    setBingBrowserHeaders(request);
+    request.setHeader(QNetworkRequest::ContentTypeHeader, "application/x-www-form-urlencoded");
+
+    // application/x-www-form-urlencoded uses '+' for spaces (what a real browser's
+    // URLSearchParams/fetch() produces); QUrlQuery's own percent-encoding would leave spaces as
+    // %20 instead, so encode the three fields by hand to match the working reference exactly.
+    const auto formEncode = [](const QByteArray &value) {
+        QByteArray encoded = QUrl::toPercentEncoding(QString::fromUtf8(value));
+        encoded.replace("%20", "+");
+        return encoded;
+    };
+    const QByteArray body = "ssml=" + formEncode(requestBody) + "&token=" + formEncode(s_bingToken) + "&key=" + formEncode(s_bingKey);
+
+    QNetworkReply *reply = m_networkManager->post(request, body);
+    QEventLoop loop;
+    connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
+    loop.exec();
+    reply->deleteLater();
+
+    if (reply->error() != QNetworkReply::NoError) {
+        setError(NetworkError, reply->errorString());
+        return {};
+    }
+
+    const QByteArray contentType = reply->header(QNetworkRequest::ContentTypeHeader).toByteArray();
+    const QByteArray data = reply->readAll();
+
+    // A successful request returns raw "audio/mpeg" bytes; an expired/invalid key+token pair (or
+    // Bing throttling us) comes back as a small JSON/text error body instead.
+    if (!contentType.startsWith("audio/") || data.isEmpty()) {
+        // The credentials may have just expired server-side (independent of our local TTL guess)
+        // - drop them so the *next* call to generateUrls() re-fetches instead of reusing dead ones.
+        s_bingKey.clear();
+        s_bingToken.clear();
+        setError(ServiceError, tr("Error: Bing TTS returned an unexpected response (%1)").arg(QString::fromUtf8(data.left(200))));
+        return {};
+    }
+
+    return data;
+}
+
+void QOnlineTts::generateBingUrls(const QString &text, QOnlineTranslator::Language lang)
+{
+    BingVoiceData voice;
+    if (lang == QOnlineTranslator::Auto || !bingVoiceData(lang, voice)) {
+        setError(UnsupportedLanguage, tr("Selected language %1 is not supported for %2").arg(QMetaEnum::fromType<QOnlineTranslator::Language>().valueToKey(lang), QMetaEnum::fromType<QOnlineTranslator::Engine>().valueToKey(QOnlineTranslator::Bing)));
+        return;
+    }
+
+    const QVector<QString> chunks = splitTextForBing(text);
+
+    purgeExpiredBingAudio();
+
+    // Skip the credentials fetch entirely if every chunk is already cached (e.g. the user just
+    // hit "speak" again on text they already played) - no need to talk to Bing at all.
+    const bool allCached = std::all_of(chunks.cbegin(), chunks.cend(), [this, lang](const QString &chunk) {
+        return m_bingAudioCache.contains(bingCacheKey(lang, chunk));
+    });
+    if (!allCached && !ensureBingCredentials())
+        return; // setError() was already called
+
+    if (!m_networkManager)
+        m_networkManager = new QNetworkAccessManager(this);
+
+    for (const QString &chunk : chunks) {
+        const QString cacheKey = bingCacheKey(lang, chunk);
+        QTemporaryFile *file = m_bingAudioCache.value(cacheKey).file;
+
+        if (!file) {
+            const QByteArray ssml = buildBingSsml(chunk, voice);
+            const QByteArray audio = postBingSpeech(ssml);
+            if (audio.isEmpty())
+                return; // setError() was already called by postBingSpeech()
+
+            // Parented to `this` - see the m_bingAudioCache comment in the header for the
+            // lifetime implications of that.
+            file = new QTemporaryFile(this);
+            file->setFileTemplate(QDir::tempPath() + QStringLiteral("/crow-translate-bing-tts-XXXXXX.mp3"));
+            if (!file->open() || file->write(audio) != audio.size()) {
+                setError(ServiceError, tr("Error: Unable to write Bing TTS audio to a temporary file"));
+                delete file;
+                return;
+            }
+            file->close();
+
+            cacheBingAudio(cacheKey, file);
+        }
+
+        m_media.append(QUrl::fromLocalFile(file->fileName()));
+    }
+}
+
+QString QOnlineTts::bingCacheKey(QOnlineTranslator::Language lang, const QString &chunkText)
+{
+    return QString::number(lang) + QLatin1Char('|') + chunkText;
+}
+
+void QOnlineTts::cacheBingAudio(const QString &key, QTemporaryFile *file)
+{
+    m_bingAudioCache.insert(key, {file, QDateTime::currentMSecsSinceEpoch()});
+    m_bingAudioCacheOrder.append(key);
+
+    if (m_bingAudioCacheOrder.size() > s_bingAudioCacheLimit) {
+        const QString oldestKey = m_bingAudioCacheOrder.takeFirst();
+        delete m_bingAudioCache.take(oldestKey).file;
+    }
+}
+
+// Lazy TTL sweep: called at the start of every Bing generateUrls() so entries don't linger
+// (and keep eating disk space) indefinitely just because the user hasn't spoken anything new.
+void QOnlineTts::purgeExpiredBingAudio()
+{
+    const qint64 cutoff = QDateTime::currentMSecsSinceEpoch() - s_bingAudioCacheTtlMs;
+
+    // Walked back-to-front purely so removeAt() below doesn't invalidate indices still to be
+    // visited - every entry is still checked regardless of position, this isn't an early-exit.
+    for (int i = m_bingAudioCacheOrder.size() - 1; i >= 0; --i) {
+        const QString &key = m_bingAudioCacheOrder.at(i);
+        const auto it = m_bingAudioCache.constFind(key);
+        if (it == m_bingAudioCache.constEnd() || it.value().cachedAtMs > cutoff)
+            continue; // not expired (or already gone)
+
+        delete it.value().file;
+        m_bingAudioCache.erase(it);
+        m_bingAudioCacheOrder.removeAt(i);
+    }
 }
