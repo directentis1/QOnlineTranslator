@@ -5,7 +5,7 @@
 // Voice count: 318
 //
 // Regenerate with:
-//   python3 tools/generate_bing_voice_catalog.py edge-tts-voice-table.json \
+//   python3 tools/generate_bing_voice_catalog.py edge-tts-voice-table.json 
 //       -o src/qonlinetranslator/bingvoicecatalog_data.h
 //
 // This file is intentionally dumb data: BingVoiceCatalog (hand written) is

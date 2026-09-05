@@ -52,7 +52,7 @@ HEADER_TEMPLATE = """\
 // Voice count: {count}
 //
 // Regenerate with:
-//   python3 tools/generate_bing_voice_catalog.py {source} \\
+//   python3 tools/generate_bing_voice_catalog.py {source} 
 //       -o src/qonlinetranslator/bingvoicecatalog_data.h
 //
 // This file is intentionally dumb data: BingVoiceCatalog (hand written) is
