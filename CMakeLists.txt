@@ -16,6 +16,7 @@ add_library(${PROJECT_NAME} STATIC
     src/qonlinetts.cpp
     src/qexample.cpp
     src/qoption.cpp
+    src/bingvoicecatalog.cpp
 )
 add_library(${PROJECT_NAME}::${PROJECT_NAME} ALIAS ${PROJECT_NAME})
 
@@ -31,6 +32,7 @@ if(DOXYGEN_FOUND)
         src/qonlinetts.h
         src/qexample.h
         src/qoption.h
+	src/bingvoicecatalog.h
         README.md
     )
 endif()
