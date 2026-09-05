@@ -1,5 +1,33 @@
 # Bing TTS voice picker - integration notes
 
+## Update: two bugs found and fixed after your testing
+
+You reported that (1) switching voices in "Speech test" needed the demo text edited to actually
+hear a difference, and (2) the main window's speak buttons always used the top-of-list default
+voice regardless of what was configured in Settings. Both are now fixed:
+
+1. **Audio cache didn't key on voice** (`qonlinetts.cpp`, `bingCacheKey()`): the Bing TTS audio
+   cache was keyed only by `(language, text)`, not by voice. Speaking the same demo text with a
+   different voice for the same language hit the cache and replayed the *previous* voice's audio.
+   Fixed by adding the voice name to the cache key (`bingCacheKey(lang, voiceName, chunkText)`), so
+   changing voices now always produces fresh audio without needing to change the text.
+
+2. **Main window never received the saved voice preferences** (`mainwindow.cpp`,
+   `loadAppSettings()`): this function pushes Yandex voice/emotion and Google region preferences
+   into `sourceSpeakButtons`/`translationSpeakButtons`/`reverseSpeakButtons` on startup and every
+   time you hit OK in Settings - but nobody ever added the equivalent
+   `setBingVoicePreferences(settings.bingVoicePreferences())` call for Bing. So the *settings
+   dialog's own* test-speech widget correctly used your chosen voice (it's wired directly, as
+   covered last time), but the actual translate-and-speak buttons in the main window still fell
+   through to `BingVoiceCatalog`'s default (first Female voice in the table) every time. Fixed by
+   adding that call for all three speak-button widgets, in the same place the Google regions call
+   already was.
+
+`mainwindow.h`/`.cpp` are now included in this package (previously they weren't touched).
+
+---
+
+
 This adds a full language -> region -> gender -> voice picker for the Bing speech engine to
 Settings -> Speech synthesis, backed by a generated, easy-to-regenerate voice catalog instead of
 hand-maintained C++ tables.

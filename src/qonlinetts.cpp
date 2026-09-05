@@ -559,10 +559,11 @@ void QOnlineTts::generateBingUrls(const QString &text, QOnlineTranslator::Langua
 
     purgeExpiredBingAudio();
 
-    // Skip the credentials fetch entirely if every chunk is already cached (e.g. the user just
-    // hit "speak" again on text they already played) - no need to talk to Bing at all.
-    const bool allCached = std::all_of(chunks.cbegin(), chunks.cend(), [this, lang](const QString &chunk) {
-        return m_bingAudioCache.contains(bingCacheKey(lang, chunk));
+    // Skip the credentials fetch entirely if every chunk is already cached for this exact voice
+    // (e.g. the user just hit "speak" again on text they already played with the same voice) - no
+    // need to talk to Bing at all.
+    const bool allCached = std::all_of(chunks.cbegin(), chunks.cend(), [this, lang, &voice](const QString &chunk) {
+        return m_bingAudioCache.contains(bingCacheKey(lang, voice.name, chunk));
     });
     if (!allCached && !ensureBingCredentials())
         return; // setError() was already called
@@ -571,7 +572,7 @@ void QOnlineTts::generateBingUrls(const QString &text, QOnlineTranslator::Langua
         m_networkManager = new QNetworkAccessManager(this);
 
     for (const QString &chunk : chunks) {
-        const QString cacheKey = bingCacheKey(lang, chunk);
+        const QString cacheKey = bingCacheKey(lang, voice.name, chunk);
         QTemporaryFile *file = m_bingAudioCache.value(cacheKey).file;
 
         if (!file) {
@@ -598,9 +599,9 @@ void QOnlineTts::generateBingUrls(const QString &text, QOnlineTranslator::Langua
     }
 }
 
-QString QOnlineTts::bingCacheKey(QOnlineTranslator::Language lang, const QString &chunkText)
+QString QOnlineTts::bingCacheKey(QOnlineTranslator::Language lang, const QString &voiceName, const QString &chunkText)
 {
-    return QString::number(lang) + QLatin1Char('|') + chunkText;
+    return QString::number(lang) + QLatin1Char('|') + voiceName + QLatin1Char('|') + chunkText;
 }
 
 void QOnlineTts::cacheBingAudio(const QString &key, QTemporaryFile *file)

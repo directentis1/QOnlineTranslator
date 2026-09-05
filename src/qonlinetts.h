@@ -340,7 +340,10 @@ private:
     static constexpr int s_bingAudioCacheLimit = 200;
     static constexpr qint64 s_bingAudioCacheTtlMs = 30 * 60 * 1000; // 30 minutes
 
-    static QString bingCacheKey(QOnlineTranslator::Language lang, const QString &chunkText);
+    // Keyed by (language, voice name, chunk text) - the voice name matters as much as the text:
+    // without it, switching voices for a language you'd already spoken some text in would keep
+    // replaying the *previous* voice's cached audio for any text you'd spoken before.
+    static QString bingCacheKey(QOnlineTranslator::Language lang, const QString &voiceName, const QString &chunkText);
     void cacheBingAudio(const QString &key, QTemporaryFile *file);
     void purgeExpiredBingAudio();
 
