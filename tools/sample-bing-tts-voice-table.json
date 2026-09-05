@@ -1,0 +1,48 @@
+[
+  {"name": "af-ZA-AdriNeural", "locale": "af-ZA", "country": "South Africa", "language": "Afrikaans", "gender": "Female"},
+  {"name": "af-ZA-WillemNeural", "locale": "af-ZA", "country": "South Africa", "language": "Afrikaans", "gender": "Male"},
+  {"name": "am-ET-AmehaNeural", "locale": "am-ET", "country": "Ethiopia", "language": "Amharic", "gender": "Male"},
+  {"name": "am-ET-MekdesNeural", "locale": "am-ET", "country": "Ethiopia", "language": "Amharic", "gender": "Female"},
+
+  {"name": "en-US-AriaNeural", "locale": "en-US", "country": "United States", "language": "English", "gender": "Female"},
+  {"name": "en-US-GuyNeural", "locale": "en-US", "country": "United States", "language": "English", "gender": "Male"},
+  {"name": "en-US-JennyNeural", "locale": "en-US", "country": "United States", "language": "English", "gender": "Female"},
+  {"name": "en-GB-SoniaNeural", "locale": "en-GB", "country": "United Kingdom", "language": "English", "gender": "Female"},
+  {"name": "en-GB-RyanNeural", "locale": "en-GB", "country": "United Kingdom", "language": "English", "gender": "Male"},
+  {"name": "en-AU-NatashaNeural", "locale": "en-AU", "country": "Australia", "language": "English", "gender": "Female"},
+  {"name": "en-AU-WilliamNeural", "locale": "en-AU", "country": "Australia", "language": "English", "gender": "Male"},
+  {"name": "en-IN-NeerjaNeural", "locale": "en-IN", "country": "India", "language": "English", "gender": "Female"},
+  {"name": "en-IN-PrabhatNeural", "locale": "en-IN", "country": "India", "language": "English", "gender": "Male"},
+
+  {"name": "fr-FR-DeniseNeural", "locale": "fr-FR", "country": "France", "language": "French", "gender": "Female"},
+  {"name": "fr-FR-HenriNeural", "locale": "fr-FR", "country": "France", "language": "French", "gender": "Male"},
+  {"name": "fr-CA-SylvieNeural", "locale": "fr-CA", "country": "Canada", "language": "French", "gender": "Female"},
+  {"name": "fr-CA-JeanNeural", "locale": "fr-CA", "country": "Canada", "language": "French", "gender": "Male"},
+
+  {"name": "es-ES-ElviraNeural", "locale": "es-ES", "country": "Spain", "language": "Spanish", "gender": "Female"},
+  {"name": "es-ES-AlvaroNeural", "locale": "es-ES", "country": "Spain", "language": "Spanish", "gender": "Male"},
+  {"name": "es-US-PalomaNeural", "locale": "es-US", "country": "United States", "language": "Spanish", "gender": "Female"},
+  {"name": "es-US-AlonsoNeural", "locale": "es-US", "country": "United States", "language": "Spanish", "gender": "Male"},
+  {"name": "es-MX-DaliaNeural", "locale": "es-MX", "country": "Mexico", "language": "Spanish", "gender": "Female"},
+  {"name": "es-MX-JorgeNeural", "locale": "es-MX", "country": "Mexico", "language": "Spanish", "gender": "Male"},
+
+  {"name": "de-DE-KatjaNeural", "locale": "de-DE", "country": "Germany", "language": "German", "gender": "Female"},
+  {"name": "de-DE-ConradNeural", "locale": "de-DE", "country": "Germany", "language": "German", "gender": "Male"},
+  {"name": "de-AT-IngridNeural", "locale": "de-AT", "country": "Austria", "language": "German", "gender": "Female"},
+  {"name": "de-AT-JonasNeural", "locale": "de-AT", "country": "Austria", "language": "German", "gender": "Male"},
+
+  {"name": "it-IT-ElsaNeural", "locale": "it-IT", "country": "Italy", "language": "Italian", "gender": "Female"},
+  {"name": "it-IT-DiegoNeural", "locale": "it-IT", "country": "Italy", "language": "Italian", "gender": "Male"},
+  {"name": "it-IT-IsabellaNeural", "locale": "it-IT", "country": "Italy", "language": "Italian", "gender": "Female"},
+
+  {"name": "vi-VN-HoaiMyNeural", "locale": "vi-VN", "country": "Vietnam", "language": "Vietnamese", "gender": "Female"},
+  {"name": "vi-VN-NamMinhNeural", "locale": "vi-VN", "country": "Vietnam", "language": "Vietnamese", "gender": "Male"},
+
+  {"name": "zh-CN-XiaoxiaoNeural", "locale": "zh-CN", "country": "China", "language": "Chinese", "gender": "Female"},
+  {"name": "zh-CN-YunxiNeural", "locale": "zh-CN", "country": "China", "language": "Chinese", "gender": "Male"},
+  {"name": "zh-HK-HiuGaaiNeural", "locale": "zh-HK", "country": "Hong Kong", "language": "Chinese (Cantonese)", "gender": "Female"},
+  {"name": "zh-HK-WanLungNeural", "locale": "zh-HK", "country": "Hong Kong", "language": "Chinese (Cantonese)", "gender": "Male"},
+
+  {"name": "ja-JP-NanamiNeural", "locale": "ja-JP", "country": "Japan", "language": "Japanese", "gender": "Female"},
+  {"name": "ja-JP-KeitaNeural", "locale": "ja-JP", "country": "Japan", "language": "Japanese", "gender": "Male"}
+]
