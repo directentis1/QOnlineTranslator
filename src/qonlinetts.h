@@ -243,6 +243,23 @@ public:
      */
     void setRegions(const QMap<QOnlineTranslator::Language, QLocale::Country> &newRegionPreferences);
 
+    /**
+     * @brief Per-language Bing voice name preferences (e.g. "en-US-AriaNeural")
+     *
+     * Populated from BingVoiceCatalog; a language with no entry (or an entry naming a voice the
+     * catalog no longer recognizes) falls back to BingVoiceCatalog::defaultVoiceName() when
+     * generateUrls() is used with the Bing engine.
+     *
+     * @return Bing voice preferences
+     */
+    const QMap<QOnlineTranslator::Language, QString> &bingVoicePreferences() const;
+
+    /**
+     * @brief set Bing voice name preferences
+     * @param newVoicePreferences new Bing voice preferences
+     */
+    void setBingVoicePreferences(const QMap<QOnlineTranslator::Language, QString> &newVoicePreferences);
+
 private:
     /**
      * @brief Per-language voice data needed to build a Bing/Azure Speech SSML request
@@ -266,14 +283,17 @@ private:
     QByteArray postBingSpeech(const QByteArray &requestBody);
     static QVector<QString> splitTextForBing(const QString &text);
     static QByteArray buildBingSsml(const QString &text, const BingVoiceData &voice);
-    static bool bingVoiceData(QOnlineTranslator::Language lang, BingVoiceData &voice);
+
+    // Resolves the voice to actually use for `lang`: m_bingVoicePreferences's choice if set and
+    // still recognized by BingVoiceCatalog, otherwise BingVoiceCatalog::defaultVoiceName(). Not
+    // static (unlike before) since it now depends on this instance's preferences.
+    bool bingVoiceData(QOnlineTranslator::Language lang, BingVoiceData &voice);
     static void setBingBrowserHeaders(QNetworkRequest &request);
 
     static const QMap<Emotion, QString> s_emotionCodes;
     static const QMap<Voice, QString> s_voiceCodes;
     static const QMap<QPair<QOnlineTranslator::Language, QLocale::Country>, QString> s_regionCodes;
     static const QMap<QOnlineTranslator::Language, QList<QLocale::Country>> s_validRegions;
-    static const QMap<QOnlineTranslator::Language, BingVoiceData> s_bingVoices;
 
     // Credentials scraped from the Bing Translator webpage, shared by every QOnlineTts instance
     // in the process (mirrors how QOnlineTranslator caches its own copy of the same credentials
@@ -288,6 +308,7 @@ private:
     static inline int s_bingRequestCounter = 0;
 
     QMap<QOnlineTranslator::Language, QLocale::Country> m_regionPreferences;
+    QMap<QOnlineTranslator::Language, QString> m_bingVoicePreferences;
 
     // Lazily created; only Bing needs to talk to the network directly (Google/Yandex just hand
     // back plain GET URLs for the media player to fetch itself, see generateUrls())
