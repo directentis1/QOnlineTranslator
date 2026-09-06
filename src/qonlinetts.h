@@ -26,6 +26,7 @@
 #include <QMediaContent>
 #include <QNetworkAccessManager>
 #include <QNetworkRequest>
+#include <QTemporaryDir>
 #include <QTemporaryFile>
 #include <QUrl>
 
@@ -355,6 +356,14 @@ private:
     static QString audioCacheKey(QOnlineTranslator::Engine engine, QOnlineTranslator::Language lang, const QString &voiceName, const QString &chunkText);
     void cacheAudio(const QString &key, QTemporaryFile *file);
     void purgeExpiredAudio();
+
+    // One throwaway directory per process (under the system temp path, name randomized by
+    // QTemporaryDir) that every QOnlineTts instance's cached audio files live in, instead of each
+    // file sitting loose directly in e.g. /tmp - keeps /tmp tidy when multiple Crow Translate
+    // instances/runs are cycled through, and means cleanup on exit is "the OS/QTemporaryDir
+    // removes one directory" rather than relying on every QTemporaryFile's own destructor having
+    // fired. Created lazily on first use and torn down automatically at process exit.
+    static QString audioCacheDirPath();
 
     static constexpr int s_googleTtsLimit = 200;
     static constexpr int s_yandexTtsLimit = 1400;

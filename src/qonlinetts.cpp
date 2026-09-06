@@ -126,7 +126,7 @@ void QOnlineTts::generateUrls(const QString &text, QOnlineTranslator::Engine eng
                 // Parented to `this` - see the m_audioCache comment in the header for the
                 // lifetime implications of that.
                 file = new QTemporaryFile(this);
-                file->setFileTemplate(QDir::tempPath() + QStringLiteral("/crow-translate-google-tts-XXXXXX.mp3"));
+                file->setFileTemplate(audioCacheDirPath() + QStringLiteral("/google-tts-XXXXXX.mp3"));
                 if (!file->open() || file->write(audio) != audio.size()) {
                     setError(ServiceError, tr("Error: Unable to write Google TTS audio to a temporary file"));
                     delete file;
@@ -614,7 +614,7 @@ void QOnlineTts::generateBingUrls(const QString &text, QOnlineTranslator::Langua
             // Parented to `this` - see the m_audioCache comment in the header for the
             // lifetime implications of that.
             file = new QTemporaryFile(this);
-            file->setFileTemplate(QDir::tempPath() + QStringLiteral("/crow-translate-bing-tts-XXXXXX.mp3"));
+            file->setFileTemplate(audioCacheDirPath() + QStringLiteral("/bing-tts-XXXXXX.mp3"));
             if (!file->open() || file->write(audio) != audio.size()) {
                 setError(ServiceError, tr("Error: Unable to write Bing TTS audio to a temporary file"));
                 delete file;
@@ -698,4 +698,16 @@ void QOnlineTts::purgeExpiredAudio()
         m_audioCache.erase(it);
         m_audioCacheOrder.removeAt(i);
     }
+}
+
+// One "/tmp/crow-translate-XXXXXX/" per process, shared by every QOnlineTts instance in it - a
+// function-local static QTemporaryDir is created on first use and lives until the process exits,
+// at which point its destructor removes the directory (and anything still in it) in one shot.
+// Falls back to the bare system temp path if the directory somehow couldn't be created, so a
+// permissions problem here degrades to the old loose-files behavior instead of losing TTS
+// entirely.
+QString QOnlineTts::audioCacheDirPath()
+{
+    static const QTemporaryDir cacheDir(QDir::tempPath() + QStringLiteral("/crow-translate-XXXXXX"));
+    return cacheDir.isValid() ? cacheDir.path() : QDir::tempPath();
 }
