@@ -27,7 +27,9 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QMediaPlayer>
+#include <QList>
 #include <QNetworkReply>
+#include <QPair>
 #include <QRegularExpression>
 #include <QStateMachine>
 
@@ -1735,6 +1737,30 @@ void QOnlineTranslator::parseGoogleFallbackTranslate()
     // undo the HTML-escaping applied to the source text (see requestGoogleFallbackTranslate()).
     if (translatedHtml.startsWith(QLatin1String("<pre>")) && translatedHtml.endsWith(QLatin1String("</pre>")))
         translatedHtml = translatedHtml.mid(5, translatedHtml.size() - 5 - 6);
+
+    // Decode numeric character references first (e.g. "&#39;" for an apostrophe, "&#x27;" in hex
+    // form). Google's translateHtml endpoint uses these for punctuation that isn't covered by the
+    // four named entities below - "&#39;" in particular shows up constantly in contractions
+    // ("un'ultima", "l'année", etc.) and was previously passed through unescaped.
+    static const QRegularExpression numericEntityRegex(QStringLiteral(R"(&#(x[0-9A-Fa-f]+|\d+);)"));
+    QRegularExpressionMatchIterator it = numericEntityRegex.globalMatch(translatedHtml);
+    QList<QPair<int, int>> matchRanges; // (position, length), replaced back-to-front to keep offsets valid
+    QList<QString> replacements;
+    while (it.hasNext()) {
+        const QRegularExpressionMatch entityMatch = it.next();
+        const QString codePointString = entityMatch.captured(1);
+        bool ok = false;
+        const uint codePoint = codePointString.startsWith(QLatin1Char('x'), Qt::CaseInsensitive)
+            ? codePointString.mid(1).toUInt(&ok, 16)
+            : codePointString.toUInt(&ok, 10);
+        if (ok) {
+            matchRanges.append({entityMatch.capturedStart(), entityMatch.capturedLength()});
+            replacements.append(QString::fromUcs4(&codePoint, 1));
+        }
+    }
+    for (int i = matchRanges.size() - 1; i >= 0; --i)
+        translatedHtml.replace(matchRanges.at(i).first, matchRanges.at(i).second, replacements.at(i));
+
     translatedHtml.replace(QLatin1String("&lt;"), QLatin1String("<"));
     translatedHtml.replace(QLatin1String("&gt;"), QLatin1String(">"));
     translatedHtml.replace(QLatin1String("&quot;"), QLatin1String("\""));

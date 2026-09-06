@@ -76,8 +76,8 @@ QOnlineTts::QOnlineTts(QObject *parent)
 
 void QOnlineTts::generateUrls(const QString &text, QOnlineTranslator::Engine engine, QOnlineTranslator::Language lang, Voice voice, Emotion emotion)
 {
-    // Drop whatever the previous call put on the playlist - but NOT the Bing audio cache, which
-    // is deliberately kept across calls (see the m_bingAudioCache comment in the header).
+    // Drop whatever the previous call put on the playlist - but NOT the shared Bing/Google audio
+    // cache, which is deliberately kept across calls (see the m_audioCache comment in the header).
     m_media.clear();
     setError(NoError, {});
 
@@ -99,15 +99,45 @@ void QOnlineTts::generateUrls(const QString &text, QOnlineTranslator::Engine eng
         if (langString.isNull())
             return;
 
+        purgeExpiredAudio();
+
+        if (!m_networkManager)
+            m_networkManager = new QNetworkAccessManager(this);
+
         // Google has a limit of characters per tts request. If the query is larger, then it should be splited into several
         while (!unparsedText.isEmpty()) {
             const int splitIndex = QOnlineTranslator::getSplitIndex(unparsedText, s_googleTtsLimit); // Split the part by special symbol
+            const QString chunk = unparsedText.left(splitIndex);
 
-            // Generate URL API for add it to the playlist
-            QUrl apiUrl(QStringLiteral("https://translate.googleapis.com/translate_tts"));
-            const QString query = QStringLiteral("ie=UTF-8&client=gtx&tl=%1&q=%2").arg(langString, QString(QUrl::toPercentEncoding(unparsedText.left(splitIndex))));
-            apiUrl.setQuery(query);
-            m_media.append(apiUrl);
+            // Google has no per-language voice choice, so the voice name slot in the cache key is
+            // simply left empty - engine + language + text is already a unique request for it.
+            const QString cacheKey = audioCacheKey(engine, lang, QString(), chunk);
+            QTemporaryFile *file = m_audioCache.value(cacheKey).file;
+
+            if (!file) {
+                QUrl apiUrl(QStringLiteral("https://translate.googleapis.com/translate_tts"));
+                const QString query = QStringLiteral("ie=UTF-8&client=gtx&tl=%1&q=%2").arg(langString, QString(QUrl::toPercentEncoding(chunk)));
+                apiUrl.setQuery(query);
+
+                const QByteArray audio = postGoogleSpeech(apiUrl);
+                if (audio.isEmpty())
+                    return; // setError() was already called by postGoogleSpeech()
+
+                // Parented to `this` - see the m_audioCache comment in the header for the
+                // lifetime implications of that.
+                file = new QTemporaryFile(this);
+                file->setFileTemplate(QDir::tempPath() + QStringLiteral("/crow-translate-google-tts-XXXXXX.mp3"));
+                if (!file->open() || file->write(audio) != audio.size()) {
+                    setError(ServiceError, tr("Error: Unable to write Google TTS audio to a temporary file"));
+                    delete file;
+                    return;
+                }
+                file->close();
+
+                cacheAudio(cacheKey, file);
+            }
+
+            m_media.append(QUrl::fromLocalFile(file->fileName()));
 
             // Remove the said part from the next saying
             unparsedText = unparsedText.mid(splitIndex);
@@ -557,13 +587,13 @@ void QOnlineTts::generateBingUrls(const QString &text, QOnlineTranslator::Langua
 
     const QVector<QString> chunks = splitTextForBing(text);
 
-    purgeExpiredBingAudio();
+    purgeExpiredAudio();
 
     // Skip the credentials fetch entirely if every chunk is already cached for this exact voice
     // (e.g. the user just hit "speak" again on text they already played with the same voice) - no
     // need to talk to Bing at all.
     const bool allCached = std::all_of(chunks.cbegin(), chunks.cend(), [this, lang, &voice](const QString &chunk) {
-        return m_bingAudioCache.contains(bingCacheKey(lang, voice.name, chunk));
+        return m_audioCache.contains(audioCacheKey(QOnlineTranslator::Bing, lang, voice.name, chunk));
     });
     if (!allCached && !ensureBingCredentials())
         return; // setError() was already called
@@ -572,8 +602,8 @@ void QOnlineTts::generateBingUrls(const QString &text, QOnlineTranslator::Langua
         m_networkManager = new QNetworkAccessManager(this);
 
     for (const QString &chunk : chunks) {
-        const QString cacheKey = bingCacheKey(lang, voice.name, chunk);
-        QTemporaryFile *file = m_bingAudioCache.value(cacheKey).file;
+        const QString cacheKey = audioCacheKey(QOnlineTranslator::Bing, lang, voice.name, chunk);
+        QTemporaryFile *file = m_audioCache.value(cacheKey).file;
 
         if (!file) {
             const QByteArray ssml = buildBingSsml(chunk, voice);
@@ -581,7 +611,7 @@ void QOnlineTts::generateBingUrls(const QString &text, QOnlineTranslator::Langua
             if (audio.isEmpty())
                 return; // setError() was already called by postBingSpeech()
 
-            // Parented to `this` - see the m_bingAudioCache comment in the header for the
+            // Parented to `this` - see the m_audioCache comment in the header for the
             // lifetime implications of that.
             file = new QTemporaryFile(this);
             file->setFileTemplate(QDir::tempPath() + QStringLiteral("/crow-translate-bing-tts-XXXXXX.mp3"));
@@ -592,45 +622,80 @@ void QOnlineTts::generateBingUrls(const QString &text, QOnlineTranslator::Langua
             }
             file->close();
 
-            cacheBingAudio(cacheKey, file);
+            cacheAudio(cacheKey, file);
         }
 
         m_media.append(QUrl::fromLocalFile(file->fileName()));
     }
 }
 
-QString QOnlineTts::bingCacheKey(QOnlineTranslator::Language lang, const QString &voiceName, const QString &chunkText)
+// Blocking GET against one of the translate_tts URLs generateUrls() builds for Google. Mirrors
+// postBingSpeech()'s blocking-POST pattern so Google's audio can live in the same on-disk cache
+// instead of re-fetching identical text from Google every time it's replayed.
+QByteArray QOnlineTts::postGoogleSpeech(const QUrl &apiUrl)
 {
-    return QString::number(lang) + QLatin1Char('|') + voiceName + QLatin1Char('|') + chunkText;
+    QNetworkRequest request(apiUrl);
+
+    // translate_tts 403s on requests with no User-Agent at all (or Qt's bare default one) - a
+    // plain browser-looking UA is enough, no other special headers are needed for this endpoint.
+    request.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"));
+
+    QNetworkReply *reply = m_networkManager->get(request);
+    QEventLoop loop;
+    connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
+    loop.exec();
+    reply->deleteLater();
+
+    if (reply->error() != QNetworkReply::NoError) {
+        setError(NetworkError, reply->errorString());
+        return {};
+    }
+
+    const QByteArray contentType = reply->header(QNetworkRequest::ContentTypeHeader).toByteArray();
+    const QByteArray data = reply->readAll();
+
+    // A successful request returns raw "audio/mpeg" bytes; throttling or a malformed request
+    // comes back as a small JSON/HTML error body instead.
+    if (!contentType.startsWith("audio/") || data.isEmpty()) {
+        setError(ServiceError, tr("Error: Google TTS returned an unexpected response (%1)").arg(QString::fromUtf8(data.left(200))));
+        return {};
+    }
+
+    return data;
 }
 
-void QOnlineTts::cacheBingAudio(const QString &key, QTemporaryFile *file)
+QString QOnlineTts::audioCacheKey(QOnlineTranslator::Engine engine, QOnlineTranslator::Language lang, const QString &voiceName, const QString &chunkText)
 {
-    m_bingAudioCache.insert(key, {file, QDateTime::currentMSecsSinceEpoch()});
-    m_bingAudioCacheOrder.append(key);
+    return QString::number(engine) + QLatin1Char('|') + QString::number(lang) + QLatin1Char('|') + voiceName + QLatin1Char('|') + chunkText;
+}
 
-    if (m_bingAudioCacheOrder.size() > s_bingAudioCacheLimit) {
-        const QString oldestKey = m_bingAudioCacheOrder.takeFirst();
-        delete m_bingAudioCache.take(oldestKey).file;
+void QOnlineTts::cacheAudio(const QString &key, QTemporaryFile *file)
+{
+    m_audioCache.insert(key, {file, QDateTime::currentMSecsSinceEpoch()});
+    m_audioCacheOrder.append(key);
+
+    if (m_audioCacheOrder.size() > s_audioCacheLimit) {
+        const QString oldestKey = m_audioCacheOrder.takeFirst();
+        delete m_audioCache.take(oldestKey).file;
     }
 }
 
-// Lazy TTL sweep: called at the start of every Bing generateUrls() so entries don't linger
+// Lazy TTL sweep: called at the start of every Bing/Google generateUrls() so entries don't linger
 // (and keep eating disk space) indefinitely just because the user hasn't spoken anything new.
-void QOnlineTts::purgeExpiredBingAudio()
+void QOnlineTts::purgeExpiredAudio()
 {
-    const qint64 cutoff = QDateTime::currentMSecsSinceEpoch() - s_bingAudioCacheTtlMs;
+    const qint64 cutoff = QDateTime::currentMSecsSinceEpoch() - s_audioCacheTtlMs;
 
     // Walked back-to-front purely so removeAt() below doesn't invalidate indices still to be
     // visited - every entry is still checked regardless of position, this isn't an early-exit.
-    for (int i = m_bingAudioCacheOrder.size() - 1; i >= 0; --i) {
-        const QString &key = m_bingAudioCacheOrder.at(i);
-        const auto it = m_bingAudioCache.find(key);
-        if (it == m_bingAudioCache.end() || it.value().cachedAtMs > cutoff)
+    for (int i = m_audioCacheOrder.size() - 1; i >= 0; --i) {
+        const QString &key = m_audioCacheOrder.at(i);
+        const auto it = m_audioCache.find(key);
+        if (it == m_audioCache.end() || it.value().cachedAtMs > cutoff)
             continue; // not expired (or already gone)
 
         delete it.value().file;
-        m_bingAudioCache.erase(it);
-        m_bingAudioCacheOrder.removeAt(i);
+        m_audioCache.erase(it);
+        m_audioCacheOrder.removeAt(i);
     }
 }

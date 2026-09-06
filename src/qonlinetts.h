@@ -27,6 +27,7 @@
 #include <QNetworkAccessManager>
 #include <QNetworkRequest>
 #include <QTemporaryFile>
+#include <QUrl>
 
 /**
  * @brief Provides TTS URL generation
@@ -290,6 +291,10 @@ private:
     bool bingVoiceData(QOnlineTranslator::Language lang, BingVoiceData &voice);
     static void setBingBrowserHeaders(QNetworkRequest &request);
 
+    // Google (translate_tts): a blocking GET, same shape as postBingSpeech()'s blocking POST, so
+    // both can share the cache below instead of Google re-fetching the same audio on every replay.
+    QByteArray postGoogleSpeech(const QUrl &apiUrl);
+
     static const QMap<Emotion, QString> s_emotionCodes;
     static const QMap<Voice, QString> s_voiceCodes;
     static const QMap<QPair<QOnlineTranslator::Language, QLocale::Country>, QString> s_regionCodes;
@@ -310,42 +315,46 @@ private:
     QMap<QOnlineTranslator::Language, QLocale::Country> m_regionPreferences;
     QMap<QOnlineTranslator::Language, QString> m_bingVoicePreferences;
 
-    // Lazily created; only Bing needs to talk to the network directly (Google/Yandex just hand
-    // back plain GET URLs for the media player to fetch itself, see generateUrls())
+    // Lazily created; Bing and Google both talk to the network directly through this (Yandex just
+    // hands back a plain GET URL for the media player to fetch itself, see generateUrls()).
     QNetworkAccessManager *m_networkManager = nullptr;
 
-    // Bing has no public streamable URL - audio has to be fetched via a POST request and handed
-    // to the player as a local file. Unlike Google/Yandex (where generateUrls() just builds URLs
-    // and repeat playback is a cheap GET the media player does itself), each Bing chunk costs a
-    // real network round-trip, so fetched audio is cached here keyed by (language, chunk text)
-    // and reused on the next identical request instead of being re-fetched. Entries older than
-    // s_bingAudioCacheTtlMs are purged the next time generateUrls() runs for Bing (there's no
-    // background timer - this is a lazy sweep, so a cache entry can outlive its TTL by however
-    // long the user goes without triggering Bing TTS again, but never gets *reused* past it), and
-    // s_bingAudioCacheLimit is a secondary hard cap (oldest-first) in case a lot of distinct text
-    // gets spoken inside one TTL window. Files are parented to `this` so they're cleaned up
-    // automatically when purged/evicted or when the QOnlineTts instance itself is destroyed.
+    // Bing has no public streamable URL at all, and Google's translate_tts URL, while technically
+    // streamable, is worth not hitting again for text the user just spoke a moment ago (it's rate
+    // limited and the request is otherwise identical). So for both engines, generateUrls() fetches
+    // the audio itself via postBingSpeech()/postGoogleSpeech() and hands the player a local file
+    // instead of a remote URL, caching that file here keyed by (engine, language, voice name, chunk
+    // text) - Google has no voice concept, so its voice name slot is always left empty; Yandex
+    // never touches this cache at all, since its generateUrls() still just builds a plain URL.
+    // Entries older than s_audioCacheTtlMs are purged the next time generateUrls() runs for a
+    // caching engine (there's no background timer - this is a lazy sweep, so an entry can outlive
+    // its TTL by however long the user goes without triggering Bing/Google TTS again, but never
+    // gets *reused* past it), and s_audioCacheLimit is a secondary hard cap (oldest-first,
+    // regardless of which engine wrote it) in case a lot of distinct text gets spoken inside one
+    // TTL window. Files are parented to `this` so they're cleaned up automatically when
+    // purged/evicted or when the QOnlineTts instance itself is destroyed.
     //
-    // IMPORTANT: this means whoever calls generateUrls() for Bing must reuse the same QOnlineTts
-    // instance across calls to get any caching benefit at all, and must keep it alive for as long
-    // as playback can last - a fresh, short-lived QOnlineTts per speak request would both defeat
-    // the cache and have its temp files deleted before QMediaPlayer gets a chance to play them.
-    // SpeakButtons keeps one QOnlineTts per SpeakButtons instance for exactly this reason.
-    struct BingCacheEntry {
+    // IMPORTANT: this means whoever calls generateUrls() for Bing/Google must reuse the same
+    // QOnlineTts instance across calls to get any caching benefit at all, and must keep it alive
+    // for as long as playback can last - a fresh, short-lived QOnlineTts per speak request would
+    // both defeat the cache and have its temp files deleted before QMediaPlayer gets a chance to
+    // play them. SpeakButtons keeps one QOnlineTts per SpeakButtons instance for exactly this
+    // reason.
+    struct AudioCacheEntry {
         QTemporaryFile *file = nullptr;
         qint64 cachedAtMs = 0; // QDateTime::currentMSecsSinceEpoch() when this entry was fetched
     };
-    QMap<QString, BingCacheEntry> m_bingAudioCache;
-    QVector<QString> m_bingAudioCacheOrder; // insertion order, oldest first, for FIFO eviction
-    static constexpr int s_bingAudioCacheLimit = 200;
-    static constexpr qint64 s_bingAudioCacheTtlMs = 30 * 60 * 1000; // 30 minutes
+    QMap<QString, AudioCacheEntry> m_audioCache;
+    QVector<QString> m_audioCacheOrder; // insertion order across both engines, oldest first, for FIFO eviction
+    static constexpr int s_audioCacheLimit = 200;
+    static constexpr qint64 s_audioCacheTtlMs = 30 * 60 * 1000; // 30 minutes
 
-    // Keyed by (language, voice name, chunk text) - the voice name matters as much as the text:
-    // without it, switching voices for a language you'd already spoken some text in would keep
-    // replaying the *previous* voice's cached audio for any text you'd spoken before.
-    static QString bingCacheKey(QOnlineTranslator::Language lang, const QString &voiceName, const QString &chunkText);
-    void cacheBingAudio(const QString &key, QTemporaryFile *file);
-    void purgeExpiredBingAudio();
+    // The engine is part of the key (not just for tidiness): Google's cache entries always carry
+    // an empty voice name, so without the engine tag a Bing voice preference named identically to
+    // some Google language code could theoretically collide with it.
+    static QString audioCacheKey(QOnlineTranslator::Engine engine, QOnlineTranslator::Language lang, const QString &voiceName, const QString &chunkText);
+    void cacheAudio(const QString &key, QTemporaryFile *file);
+    void purgeExpiredAudio();
 
     static constexpr int s_googleTtsLimit = 200;
     static constexpr int s_yandexTtsLimit = 1400;
