@@ -41,8 +41,9 @@ namespace
 // genuine Edge client" to the tfettts-adjacent readaloud endpoint.
 const QByteArray kEdgeTrustedClientToken = "6A5AA1D4EAFF4E9FB37E23D68491D6F4";
 const QString kEdgeWssUrl = QStringLiteral(
-    "wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1"
-    "?TrustedClientToken=" + kEdgeTrustedClientToken);
+                                 "wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1"
+                                 "?TrustedClientToken=")
+    + QString::fromLatin1(kEdgeTrustedClientToken);
 // Matches the Chrome/Edge version advertised in setBingBrowserHeaders() below, for consistency.
 const QString kEdgeSecMsGecVersion = QStringLiteral("1-124.0.0.0");
 }

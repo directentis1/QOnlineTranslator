@@ -50,7 +50,6 @@ class QOnlineTts : public QObject
 {
     Q_OBJECT
     Q_DISABLE_COPY(QOnlineTts)
-    QT_FORWARD_DECLARE_CLASS(QWebSocket)
 
 public:
     /**
