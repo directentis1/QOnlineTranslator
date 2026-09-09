@@ -20,15 +20,32 @@
 #include "qonlinetts.h"
 #include "bingvoicecatalog.h"
 
+#include <QCryptographicHash>
 #include <QDateTime>
 #include <QDir>
 #include <QEventLoop>
 #include <QMetaEnum>
 #include <QNetworkReply>
 #include <QNetworkRequest>
+#include <QRandomGenerator>
 #include <QUrl>
+#include <QUuid>
+#include <QWebSocket>
 #include <QtAlgorithms>
 #include <algorithm>
+#include <cmath>
+
+namespace
+{
+// Public, non-secret constant embedded in Microsoft Edge / edge-tts; identifies "this is a
+// genuine Edge client" to the tfettts-adjacent readaloud endpoint.
+const QByteArray kEdgeTrustedClientToken = "6A5AA1D4EAFF4E9FB37E23D68491D6F4";
+const QString kEdgeWssUrl = QStringLiteral(
+    "wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1"
+    "?TrustedClientToken=" + kEdgeTrustedClientToken);
+// Matches the Chrome/Edge version advertised in setBingBrowserHeaders() below, for consistency.
+const QString kEdgeSecMsGecVersion = QStringLiteral("1-124.0.0.0");
+}
 
 const QMap<QOnlineTts::Emotion, QString> QOnlineTts::s_emotionCodes = {
     {Neutral, QStringLiteral("neutral")},
@@ -187,6 +204,20 @@ void QOnlineTts::generateUrls(const QString &text, QOnlineTranslator::Engine eng
         generateBingUrls(text, lang);
         break;
     }
+    case QOnlineTranslator::Edge: {
+        if (voice != NoVoice) {
+            setError(UnsupportedVoice, tr("Selected engine %1 does not support voice settings").arg(QMetaEnum::fromType<QOnlineTranslator::Engine>().valueToKey(engine)));
+            return;
+        }
+
+        if (emotion != NoEmotion) {
+            setError(UnsupportedEmotion, tr("Selected engine %1 does not support emotion settings").arg(QMetaEnum::fromType<QOnlineTranslator::Engine>().valueToKey(engine)));
+            return;
+        }
+
+        generateEdgeUrls(text, lang);
+        break;
+    }
     case QOnlineTranslator::LibreTranslate:
     case QOnlineTranslator::Lingva:
     case QOnlineTranslator::DeepLX:
@@ -258,6 +289,7 @@ bool QOnlineTts::isSupportTts(QOnlineTranslator::Engine engine)
     case QOnlineTranslator::Google:
     case QOnlineTranslator::Yandex:
     case QOnlineTranslator::Bing:
+    case QOnlineTranslator::Edge:
         return true;
     case QOnlineTranslator::LibreTranslate:
     case QOnlineTranslator::Lingva:
@@ -348,7 +380,7 @@ void QOnlineTts::setBingVoicePreferences(const QMap<QOnlineTranslator::Language,
     m_bingVoicePreferences = newVoicePreferences;
 }
 
-bool QOnlineTts::bingVoiceData(QOnlineTranslator::Language lang, BingVoiceData &voice)
+bool QOnlineTts::catalogVoiceData(QOnlineTranslator::Language lang, BingVoiceData &voice)
 {
     QString locale;
     QString gender;
@@ -580,7 +612,7 @@ QByteArray QOnlineTts::postBingSpeech(const QByteArray &requestBody)
 void QOnlineTts::generateBingUrls(const QString &text, QOnlineTranslator::Language lang)
 {
     BingVoiceData voice;
-    if (lang == QOnlineTranslator::Auto || !bingVoiceData(lang, voice)) {
+    if (lang == QOnlineTranslator::Auto || !catalogVoiceData(lang, voice)) {
         setError(UnsupportedLanguage, tr("Selected language %1 is not supported for %2").arg(QMetaEnum::fromType<QOnlineTranslator::Language>().valueToKey(lang), QMetaEnum::fromType<QOnlineTranslator::Engine>().valueToKey(QOnlineTranslator::Bing)));
         return;
     }
@@ -617,6 +649,304 @@ void QOnlineTts::generateBingUrls(const QString &text, QOnlineTranslator::Langua
             file->setFileTemplate(audioCacheDirPath() + QStringLiteral("/bing-tts-XXXXXX.mp3"));
             if (!file->open() || file->write(audio) != audio.size()) {
                 setError(ServiceError, tr("Error: Unable to write Bing TTS audio to a temporary file"));
+                delete file;
+                return;
+            }
+            file->close();
+
+            cacheAudio(cacheKey, file);
+        }
+
+        m_media.append(QUrl::fromLocalFile(file->fileName()));
+    }
+}
+
+// --- Edge TTS -------------------------------------------------------------------------------
+//
+// Ported from the edge-tts Python project (drm.py + communicate.py). Talks to the same
+// WebSocket endpoint Microsoft Edge's Read Aloud feature uses. Unlike Bing above, this needs no
+// scraped credentials - just a locally-computed anti-abuse token (Sec-MS-GEC) - but it does need
+// a persistent WebSocket connection per chunk instead of a single POST.
+
+QString QOnlineTts::edgeGenerateSecMsGec()
+{
+    constexpr qint64 winEpoch = 11644473600LL; // 1601-01-01 -> 1970-01-01, in seconds
+    constexpr double sToNs = 1e9;
+
+    double ticks = QDateTime::currentDateTimeUtc().toMSecsSinceEpoch() / 1000.0 + s_edgeClockSkewSeconds;
+    ticks += winEpoch;
+    ticks -= std::fmod(ticks, 300.0); // round down to the nearest 5 minutes
+    ticks *= sToNs / 100.0; // convert to 100ns Windows file-time ticks
+
+    const QByteArray toHash = QByteArray::number(ticks, 'f', 0) + kEdgeTrustedClientToken;
+    return QString::fromLatin1(QCryptographicHash::hash(toHash, QCryptographicHash::Sha256).toHex().toUpper());
+}
+
+QString QOnlineTts::edgeGenerateMuid()
+{
+    QByteArray bytes(16, Qt::Uninitialized);
+    for (int i = 0; i < bytes.size(); ++i)
+        bytes[i] = static_cast<char>(QRandomGenerator::global()->bounded(256));
+    return QString::fromLatin1(bytes.toHex().toUpper());
+}
+
+QString QOnlineTts::edgeGenerateConnectId()
+{
+    // 32 lowercase hex chars, no dashes/braces - same shape as uuid4().hex in edge-tts.
+    return QUuid::createUuid().toString(QUuid::Id128);
+}
+
+QString QOnlineTts::edgeDateToString()
+{
+    static const char *const dayNames[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
+    static const char *const monthNames[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+
+    const QDateTime now = QDateTime::currentDateTimeUtc();
+    const QDate date = now.date();
+
+    // JavaScript Date.toString()-style string, matching what Edge's own JS client sends.
+    return QStringLiteral("%1 %2 %3 %4 %5 GMT+0000 (Coordinated Universal Time)")
+        .arg(QLatin1String(dayNames[date.dayOfWeek() % 7]),
+             QLatin1String(monthNames[date.month() - 1]),
+             QString::number(date.day()).rightJustified(2, QLatin1Char('0')),
+             QString::number(date.year()),
+             now.time().toString(QStringLiteral("HH:mm:ss")));
+}
+
+QString QOnlineTts::edgeSpeechConfigMessage()
+{
+    // Word/sentence boundary metadata is disabled - this class only needs audio, not subtitles.
+    return QStringLiteral(
+               "X-Timestamp:%1\r\n"
+               "Content-Type:application/json; charset=utf-8\r\n"
+               "Path:speech.config\r\n\r\n"
+               "{\"context\":{\"synthesis\":{\"audio\":{\"metadataoptions\":{"
+               "\"sentenceBoundaryEnabled\":\"false\",\"wordBoundaryEnabled\":\"false\"},"
+               "\"outputFormat\":\"audio-24khz-48kbitrate-mono-mp3\"}}}}")
+        .arg(edgeDateToString());
+}
+
+QString QOnlineTts::edgeSsmlRequestMessage(const QString &ssml)
+{
+    return QStringLiteral(
+               "X-RequestId:%1\r\n"
+               "Content-Type:application/ssml+xml\r\n"
+               "X-Timestamp:%2Z\r\n"
+               "Path:ssml\r\n\r\n"
+               "%3")
+        .arg(edgeGenerateConnectId(), edgeDateToString(), ssml);
+}
+
+QString QOnlineTts::buildEdgeSsml(const QString &escapedText, const BingVoiceData &voice)
+{
+    // "escapedText" is assumed already XML-escaped by the caller (splitTextForEdge()) - not
+    // escaped again here, matching edge-tts's own mkssml(), which never double-escapes.
+    const QString shortName = voice.name.mid(voice.locale.size() + 1); // "en-US-AriaNeural" -> "AriaNeural"
+
+    static const QString ssmlTemplate = QStringLiteral(
+        "<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='%1'>"
+        "<voice name='Microsoft Server Speech Text to Speech Voice (%1, %2)'>"
+        "<prosody pitch='+0Hz' rate='+0%' volume='+0%'>%3</prosody>"
+        "</voice>"
+        "</speak>");
+
+    return ssmlTemplate.arg(voice.locale, shortName, escapedText);
+}
+
+// Splits an already XML-escaped, UTF-8 encoded byte string into chunks no longer than
+// `byteLimit` bytes, preferring to break at the last newline or space within the limit, and
+// never in the middle of a multi-byte UTF-8 character or an XML entity like "&amp;". Ported
+// from edge-tts's split_text_by_byte_length().
+QVector<QByteArray> QOnlineTts::splitEscapedUtf8ByByteLength(const QByteArray &text, int byteLimit)
+{
+    const auto safeUtf8SplitPoint = [](const QByteArray &segment) {
+        int splitAt = segment.size();
+        while (splitAt > 0) {
+            const QByteArray candidate = segment.left(splitAt);
+            if (QString::fromUtf8(candidate).toUtf8() == candidate)
+                return splitAt; // Largest prefix that round-trips through UTF-8 cleanly
+            --splitAt;
+        }
+        return splitAt;
+    };
+
+    const auto adjustForXmlEntity = [](const QByteArray &text, int splitAt) {
+        while (splitAt > 0) {
+            const int ampersand = text.lastIndexOf('&', splitAt - 1);
+            if (ampersand < 0)
+                break;
+            const int semicolon = text.indexOf(';', ampersand);
+            if (semicolon != -1 && semicolon < splitAt)
+                break; // Terminated entity (e.g. "&amp;") fully before splitAt - safe as-is
+            splitAt = ampersand; // Unterminated entity - move the split before the '&'
+        }
+        return splitAt;
+    };
+
+    QVector<QByteArray> chunks;
+    QByteArray remaining = text;
+
+    while (remaining.size() > byteLimit) {
+        int splitAt = remaining.lastIndexOf('\n', byteLimit - 1);
+        if (splitAt < 0)
+            splitAt = remaining.lastIndexOf(' ', byteLimit - 1);
+        if (splitAt < 0)
+            splitAt = safeUtf8SplitPoint(remaining.left(byteLimit));
+
+        splitAt = adjustForXmlEntity(remaining, splitAt);
+
+        const QByteArray chunk = remaining.left(splitAt).trimmed();
+        if (!chunk.isEmpty())
+            chunks.append(chunk);
+
+        remaining = remaining.mid(splitAt > 0 ? splitAt : 1);
+    }
+
+    const QByteArray finalChunk = remaining.trimmed();
+    if (!finalChunk.isEmpty())
+        chunks.append(finalChunk);
+
+    return chunks;
+}
+
+QVector<QString> QOnlineTts::splitTextForEdge(const QString &text)
+{
+    const QByteArray escaped = text.toHtmlEscaped().toUtf8();
+
+    QVector<QString> chunks;
+    for (const QByteArray &chunk : splitEscapedUtf8ByByteLength(escaped, s_edgeTtsChunkByteLimit))
+        chunks.append(QString::fromUtf8(chunk));
+    return chunks;
+}
+
+// Opens a WebSocket connection, sends the speech.config + ssml requests, and blocks (via a
+// nested event loop, matching this class's synchronous style elsewhere) until the "turn.end"
+// message arrives or an error occurs. Returns the concatenated raw MP3 bytes for this chunk, or
+// an empty array on error (with setError() already called).
+QByteArray QOnlineTts::postEdgeSpeech(const QString &ssml)
+{
+    const QUrl url(kEdgeWssUrl
+                    + QStringLiteral("&ConnectionId=%1&Sec-MS-GEC=%2&Sec-MS-GEC-Version=%3")
+                          .arg(edgeGenerateConnectId(), edgeGenerateSecMsGec(), kEdgeSecMsGecVersion));
+
+    QNetworkRequest request(url);
+    request.setHeader(QNetworkRequest::UserAgentHeader,
+                       QStringLiteral("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                                      "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0"));
+    request.setRawHeader("Origin", "chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold");
+    request.setRawHeader("Pragma", "no-cache");
+    request.setRawHeader("Cache-Control", "no-cache");
+    request.setRawHeader("Accept-Language", "en-US,en;q=0.9");
+    request.setRawHeader("Cookie", "muid=" + edgeGenerateMuid().toUtf8() + ";");
+
+    QWebSocket socket;
+    QByteArray audio;
+    bool audioReceived = false;
+    bool turnEnded = false;
+    bool socketFailed = false;
+    QString errorText;
+
+    QEventLoop loop;
+
+    connect(&socket, &QWebSocket::connected, &socket, [&]() {
+        socket.sendTextMessage(edgeSpeechConfigMessage());
+        socket.sendTextMessage(edgeSsmlRequestMessage(ssml));
+    });
+
+    connect(&socket, &QWebSocket::textMessageReceived, &socket, [&](const QString &message) {
+        const int headerEnd = message.indexOf(QStringLiteral("\r\n\r\n"));
+        const QString headerBlock = headerEnd >= 0 ? message.left(headerEnd) : message;
+
+        QString path;
+        const auto lines = headerBlock.split(QStringLiteral("\r\n"));
+        for (const QString &line : lines) {
+            const int colon = line.indexOf(QLatin1Char(':'));
+            if (colon >= 0 && line.left(colon).compare(QStringLiteral("Path"), Qt::CaseInsensitive) == 0)
+                path = line.mid(colon + 1);
+        }
+
+        if (path == QStringLiteral("turn.end")) {
+            turnEnded = true;
+            loop.quit();
+        }
+        // turn.start/response carry nothing needed here; audio.metadata never arrives since
+        // word/sentence boundaries are disabled in edgeSpeechConfigMessage().
+    });
+
+    connect(&socket, &QWebSocket::binaryMessageReceived, &socket, [&](const QByteArray &message) {
+        if (message.size() < 2)
+            return;
+
+        const int headerLength = (static_cast<unsigned char>(message.at(0)) << 8) | static_cast<unsigned char>(message.at(1));
+        if (2 + headerLength > message.size())
+            return;
+
+        const QByteArray headerBlock = message.mid(2, headerLength);
+        QString path;
+        const auto lines = headerBlock.split('\n');
+        for (const QByteArray &rawLine : lines) {
+            const QByteArray line = rawLine.trimmed();
+            const int colon = line.indexOf(':');
+            if (colon >= 0 && line.left(colon).compare("Path", Qt::CaseInsensitive) == 0)
+                path = QString::fromLatin1(line.mid(colon + 1));
+        }
+
+        if (path == QStringLiteral("audio")) {
+            audio += message.mid(2 + headerLength);
+            audioReceived = true;
+        }
+    });
+
+    connect(&socket, QOverload<QAbstractSocket::SocketError>::of(&QWebSocket::error), &socket, [&](QAbstractSocket::SocketError) {
+        socketFailed = true;
+        errorText = socket.errorString();
+        loop.quit();
+    });
+
+    connect(&socket, &QWebSocket::disconnected, &loop, &QEventLoop::quit);
+
+    socket.open(request);
+    loop.exec();
+    socket.close();
+
+    if (socketFailed) {
+        setError(NetworkError, errorText);
+        return {};
+    }
+    if (!turnEnded || !audioReceived) {
+        setError(ServiceError, tr("Error: Edge TTS returned an unexpected or incomplete response"));
+        return {};
+    }
+
+    return audio;
+}
+
+void QOnlineTts::generateEdgeUrls(const QString &text, QOnlineTranslator::Language lang)
+{
+    BingVoiceData voice;
+    if (lang == QOnlineTranslator::Auto || !catalogVoiceData(lang, voice)) {
+        setError(UnsupportedLanguage, tr("Selected language %1 is not supported for %2").arg(QMetaEnum::fromType<QOnlineTranslator::Language>().valueToKey(lang), QMetaEnum::fromType<QOnlineTranslator::Engine>().valueToKey(QOnlineTranslator::Edge)));
+        return;
+    }
+
+    const QVector<QString> chunks = splitTextForEdge(text);
+
+    purgeExpiredAudio();
+
+    for (const QString &escapedChunk : chunks) {
+        const QString cacheKey = audioCacheKey(QOnlineTranslator::Edge, lang, voice.name, escapedChunk);
+        QTemporaryFile *file = m_audioCache.value(cacheKey).file;
+
+        if (!file) {
+            const QString ssml = buildEdgeSsml(escapedChunk, voice);
+            const QByteArray audio = postEdgeSpeech(ssml);
+            if (audio.isEmpty())
+                return; // setError() was already called by postEdgeSpeech()
+
+            file = new QTemporaryFile(this);
+            file->setFileTemplate(audioCacheDirPath() + QStringLiteral("/edge-tts-XXXXXX.mp3"));
+            if (!file->open() || file->write(audio) != audio.size()) {
+                setError(ServiceError, tr("Error: Unable to write Edge TTS audio to a temporary file"));
                 delete file;
                 return;
             }

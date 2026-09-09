@@ -190,7 +190,8 @@ public:
         LibreTranslate,
         Lingva,
         DeepLX,
-        DeepLXFree
+        DeepLXFree,
+        Edge
     };
     Q_ENUM(Engine)
 

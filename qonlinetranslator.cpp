@@ -27,7 +27,9 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QMediaPlayer>
+#include <QList>
 #include <QNetworkReply>
+#include <QPair>
 #include <QRegularExpression>
 #include <QStateMachine>
 
@@ -309,6 +311,8 @@ void QOnlineTranslator::translate(const QString &text, Engine engine, Language t
     case DeepLXFree:
         buildDeepLXFreeStateMachine();
         break;
+    case Edge:
+        break; // TTS-only; unreachable in practice since isSupportTranslation() rejected it above
     }
 
     m_stateMachine->start();
@@ -364,6 +368,8 @@ void QOnlineTranslator::detectLanguage(const QString &text, Engine engine)
         break;
     case DeepLXFree:
         buildDeepLXFreeDetectStateMachine();
+        break;
+    case Edge:
         break;
     }
 
@@ -1468,6 +1474,9 @@ bool QOnlineTranslator::isSupportTranslation(Engine engine, Language lang)
             break;
         }
         break;
+    case Edge:
+        isSupported = false;
+        break;
     }
 
     return isSupported;
@@ -1735,6 +1744,30 @@ void QOnlineTranslator::parseGoogleFallbackTranslate()
     // undo the HTML-escaping applied to the source text (see requestGoogleFallbackTranslate()).
     if (translatedHtml.startsWith(QLatin1String("<pre>")) && translatedHtml.endsWith(QLatin1String("</pre>")))
         translatedHtml = translatedHtml.mid(5, translatedHtml.size() - 5 - 6);
+
+    // Decode numeric character references first (e.g. "&#39;" for an apostrophe, "&#x27;" in hex
+    // form). Google's translateHtml endpoint uses these for punctuation that isn't covered by the
+    // four named entities below - "&#39;" in particular shows up constantly in contractions
+    // ("un'ultima", "l'année", etc.) and was previously passed through unescaped.
+    static const QRegularExpression numericEntityRegex(QStringLiteral(R"(&#(x[0-9A-Fa-f]+|\d+);)"));
+    QRegularExpressionMatchIterator it = numericEntityRegex.globalMatch(translatedHtml);
+    QList<QPair<int, int>> matchRanges; // (position, length), replaced back-to-front to keep offsets valid
+    QList<QString> replacements;
+    while (it.hasNext()) {
+        const QRegularExpressionMatch entityMatch = it.next();
+        const QString codePointString = entityMatch.captured(1);
+        bool ok = false;
+        const uint codePoint = codePointString.startsWith(QLatin1Char('x'), Qt::CaseInsensitive)
+            ? codePointString.mid(1).toUInt(&ok, 16)
+            : codePointString.toUInt(&ok, 10);
+        if (ok) {
+            matchRanges.append({entityMatch.capturedStart(), entityMatch.capturedLength()});
+            replacements.append(QString::fromUcs4(&codePoint, 1));
+        }
+    }
+    for (int i = matchRanges.size() - 1; i >= 0; --i)
+        translatedHtml.replace(matchRanges.at(i).first, matchRanges.at(i).second, replacements.at(i));
+
     translatedHtml.replace(QLatin1String("&lt;"), QLatin1String("<"));
     translatedHtml.replace(QLatin1String("&gt;"), QLatin1String(">"));
     translatedHtml.replace(QLatin1String("&quot;"), QLatin1String("\""));
@@ -2844,6 +2877,8 @@ bool QOnlineTranslator::isSupportTranslit(Engine engine, Language lang)
     case DeepLX: // DeepLX doesn't support translit
     case DeepLXFree: // DeepLXFree doesn't support translit
         return false;
+    case Edge: // Edge doesn't support translit
+        return false;
     }
 
     return false;
@@ -3109,6 +3144,8 @@ bool QOnlineTranslator::isSupportDictionary(Engine engine, Language sourceLang, 
     case DeepLX: // DeepLX doesn't support dictionaries
     case DeepLXFree: // DeepLXFree doesn't support dictionaries
         return false;
+    case Edge: // Edge doesn't support dictionaries
+        return false;
     }
 
     return false;
@@ -3137,6 +3174,8 @@ QString QOnlineTranslator::languageApiCode(Engine engine, Language lang)
     case DeepLXFree:
         // A handful of languages use codes that differ from the generic (Google-style) ones
         return s_deeplxFreeLanguageCodes.value(lang, s_genericLanguageCodes.value(lang)).toUpper();
+    case Edge:
+        return {};
     }
 
     Q_UNREACHABLE();
@@ -3161,6 +3200,8 @@ QOnlineTranslator::Language QOnlineTranslator::language(Engine engine, const QSt
         return s_genericLanguageCodes.key(langCode.toLower(), NoLanguage);
     case DeepLXFree:
         return s_deeplxFreeLanguageCodes.key(langCode.toUpper(), s_genericLanguageCodes.key(langCode.toLower(), NoLanguage));
+    case Edge:
+        return NoLanguage;
     }
 
     Q_UNREACHABLE();

@@ -29,6 +29,7 @@
 #include <QTemporaryDir>
 #include <QTemporaryFile>
 #include <QUrl>
+#include <QAbstractSocket>
 
 /**
  * @brief Provides TTS URL generation
@@ -49,6 +50,7 @@ class QOnlineTts : public QObject
 {
     Q_OBJECT
     Q_DISABLE_COPY(QOnlineTts)
+    QT_FORWARD_DECLARE_CLASS(QWebSocket)
 
 public:
     /**
@@ -265,6 +267,9 @@ public:
 private:
     /**
      * @brief Per-language voice data needed to build a Bing/Azure Speech SSML request
+     *
+     * Shared by the Bing and Edge engines - both speak Azure Cognitive Services voices out of
+     * BingVoiceCatalog, just via different transport/endpoints.
      */
     struct BingVoiceData {
         QString locale; // e.g. "en-US"
@@ -286,10 +291,28 @@ private:
     static QVector<QString> splitTextForBing(const QString &text);
     static QByteArray buildBingSsml(const QString &text, const BingVoiceData &voice);
 
+    // Edge (the same WebSocket TTS endpoint Microsoft Edge's Read Aloud feature uses - reverse
+    // engineered by, and ported here from, the edge-tts Python project). Uses the exact same
+    // voice catalog as Bing above (BingVoiceCatalog / catalogVoiceData()); the only differences
+    // are transport (WebSocket vs HTTP POST) and the anti-abuse token scheme (Sec-MS-GEC vs
+    // Bing's IG/IID/key/token).
+    void generateEdgeUrls(const QString &text, QOnlineTranslator::Language lang);
+    QByteArray postEdgeSpeech(const QString &ssml);
+    static QVector<QString> splitTextForEdge(const QString &text);
+    static QVector<QByteArray> splitEscapedUtf8ByByteLength(const QByteArray &escapedUtf8Text, int byteLimit);
+    static QString buildEdgeSsml(const QString &escapedText, const BingVoiceData &voice);
+    static QString edgeSpeechConfigMessage();
+    static QString edgeSsmlRequestMessage(const QString &ssml);
+    static QString edgeDateToString();
+    static QString edgeGenerateConnectId();
+    static QString edgeGenerateMuid();
+    static QString edgeGenerateSecMsGec();
+
     // Resolves the voice to actually use for `lang`: m_bingVoicePreferences's choice if set and
-    // still recognized by BingVoiceCatalog, otherwise BingVoiceCatalog::defaultVoiceName(). Not
-    // static (unlike before) since it now depends on this instance's preferences.
-    bool bingVoiceData(QOnlineTranslator::Language lang, BingVoiceData &voice);
+    // still recognized by BingVoiceCatalog, otherwise BingVoiceCatalog::defaultVoiceName(). Named
+    // "catalog" rather than "bing" because both the Bing and Edge engines call this - they share
+    // one voice catalog and one preferences map.
+    bool catalogVoiceData(QOnlineTranslator::Language lang, BingVoiceData &voice);
     static void setBingBrowserHeaders(QNetworkRequest &request);
 
     // Google (translate_tts): a blocking GET, same shape as postBingSpeech()'s blocking POST, so
@@ -373,6 +396,18 @@ private:
     // TranslateWebPage's textToSpeech.js so behavior matches the reference implementation.
     static constexpr int s_bingTtsSoftLimit = 170;
     static constexpr int s_bingTtsHardWordLimit = 160;
+
+    // The Edge websocket endpoint rejects an SSML payload over this many UTF-8 bytes; ported
+    // as-is from edge-tts's Communicate class.
+    static constexpr int s_edgeTtsChunkByteLimit = 4096;
+
+    // Clock-skew correction for the Sec-MS-GEC anti-abuse token, mirroring edge-tts's DRM class.
+    // Unlike Bing's credential scraping, Edge doesn't expose an easy way to read the handshake's
+    // HTTP status/Date header back out of QWebSocket, so unlike edge-tts this is never
+    // auto-corrected on a 403 - it exists mainly so a future improvement can wire that in without
+    // changing this class's shape. Starts at 0 and is safe to leave untouched; only matters if
+    // the local system clock is meaningfully wrong.
+    static inline double s_edgeClockSkewSeconds = 0.0;
 
     QList<QMediaContent> m_media;
     QString m_errorString;
