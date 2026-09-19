@@ -44,8 +44,13 @@ const QString kEdgeWssUrl = QStringLiteral(
                                  "wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1"
                                  "?TrustedClientToken=")
     + QString::fromLatin1(kEdgeTrustedClientToken);
-// Matches the Chrome/Edge version advertised in setBingBrowserHeaders() below, for consistency.
-const QString kEdgeSecMsGecVersion = QStringLiteral("1-124.0.0.0");
+
+// Must stay in sync with each other, and with whatever current Chromium version Microsoft's
+// server is validating Sec-MS-GEC-Version against - check edge-tts's constants.py
+// (CHROMIUM_FULL_VERSION) periodically, since Microsoft bumps this from time to time and stale
+// values get rejected with a 403 during the WebSocket handshake.
+const QString kEdgeChromiumMajorVersion = QStringLiteral("143");
+const QString kEdgeSecMsGecVersion = QStringLiteral("1-143.0.3650.75");
 }
 
 const QMap<QOnlineTts::Emotion, QString> QOnlineTts::s_emotionCodes = {
@@ -832,8 +837,9 @@ QByteArray QOnlineTts::postEdgeSpeech(const QString &ssml)
 
     QNetworkRequest request(url);
     request.setHeader(QNetworkRequest::UserAgentHeader,
-                       QStringLiteral("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                                      "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0"));
+                   QStringLiteral("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                                  "(KHTML, like Gecko) Chrome/%1.0.0.0 Safari/537.36 Edg/%1.0.0.0")
+                       .arg(kEdgeChromiumMajorVersion));
     request.setRawHeader("Origin", "chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold");
     request.setRawHeader("Pragma", "no-cache");
     request.setRawHeader("Cache-Control", "no-cache");
