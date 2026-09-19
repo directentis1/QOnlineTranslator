@@ -352,14 +352,14 @@
   {
     "name": "ca-ES-EnricNeural",
     "locale": "ca-ES",
-    "country": "",
+    "country": "Spain",
     "language": "Catalan",
     "gender": "Male"
   },
   {
     "name": "ca-ES-JoanaNeural",
     "locale": "ca-ES",
-    "country": "",
+    "country": "Spain",
     "language": "Catalan",
     "gender": "Female"
   },
@@ -1003,14 +1003,14 @@
   {
     "name": "gl-ES-RoiNeural",
     "locale": "gl-ES",
-    "country": "",
+    "country": "Spain",
     "language": "Galician",
     "gender": "Male"
   },
   {
     "name": "gl-ES-SabelaNeural",
     "locale": "gl-ES",
-    "country": "",
+    "country": "Spain",
     "language": "Galician",
     "gender": "Female"
   },
