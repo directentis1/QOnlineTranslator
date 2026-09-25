@@ -624,7 +624,7 @@ QByteArray QOnlineTts::postBingSpeech(const QByteArray &requestBody)
 void QOnlineTts::generateBingUrls(const QString &text, QOnlineTranslator::Language lang)
 {
     BingVoiceData voice;
-    if (lang == QOnlineTranslator::Auto || !bingVoiceData(lang, voice)) {
+    if (lang == QOnlineTranslator::Auto || !catalogVoiceData(lang, voice)) {
         setError(UnsupportedLanguage, tr("Selected language %1 is not supported for %2").arg(QMetaEnum::fromType<QOnlineTranslator::Language>().valueToKey(lang), QMetaEnum::fromType<QOnlineTranslator::Engine>().valueToKey(QOnlineTranslator::Bing)));
         return;
     }
@@ -935,7 +935,7 @@ QByteArray QOnlineTts::postEdgeSpeech(const QString &ssml)
 void QOnlineTts::generateEdgeUrls(const QString &text, QOnlineTranslator::Language lang)
 {
     BingVoiceData voice;
-    if (lang == QOnlineTranslator::Auto || !bingVoiceData(lang, voice)) {
+    if (lang == QOnlineTranslator::Auto || !catalogVoiceData(lang, voice)) {
         setError(UnsupportedLanguage, tr("Selected language %1 is not supported for %2").arg(QMetaEnum::fromType<QOnlineTranslator::Language>().valueToKey(lang), QMetaEnum::fromType<QOnlineTranslator::Engine>().valueToKey(QOnlineTranslator::Edge)));
         return;
     }
