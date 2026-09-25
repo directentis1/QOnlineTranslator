@@ -263,6 +263,19 @@ public:
      */
     void setBingVoicePreferences(const QMap<QOnlineTranslator::Language, QString> &newVoicePreferences);
 
+    /**
+     * @brief Sets prosody adjustments used by generateUrls() for the Bing and Edge engines.
+     *
+     * Bing's SSML only honors rate; pitch and volume are silently ignored (Bing's tfettts
+     * endpoint doesn't accept them). Edge honors all three. 0 means "unchanged" for all three and
+     * is the default if this is never called.
+     *
+     * @param ratePercent speech rate adjustment in percent, applied by Bing and Edge
+     * @param pitchHz pitch adjustment in Hz, applied by Edge only
+     * @param volumePercent volume adjustment in percent, applied by Edge only
+     */
+    void setProsody(int ratePercent, int pitchHz = 0, int volumePercent = 0);
+
 private:
     /**
      * @brief Per-language voice data needed to build a Bing/Azure Speech SSML request
@@ -288,7 +301,7 @@ private:
     bool ensureBingCredentials();
     QByteArray postBingSpeech(const QByteArray &requestBody);
     static QVector<QString> splitTextForBing(const QString &text);
-    static QByteArray buildBingSsml(const QString &text, const BingVoiceData &voice);
+    static QByteArray buildBingSsml(const QString &text, const BingVoiceData &voice, int ratePercent);
 
     // Edge (the same WebSocket TTS endpoint Microsoft Edge's Read Aloud feature uses - reverse
     // engineered by, and ported here from, the edge-tts Python project). Uses the exact same
@@ -299,7 +312,7 @@ private:
     QByteArray postEdgeSpeech(const QString &ssml);
     static QVector<QString> splitTextForEdge(const QString &text);
     static QVector<QByteArray> splitEscapedUtf8ByByteLength(const QByteArray &escapedUtf8Text, int byteLimit);
-    static QString buildEdgeSsml(const QString &escapedText, const BingVoiceData &voice);
+    static QString buildEdgeSsml(const QString &escapedText, const BingVoiceData &voice, int ratePercent, int pitchHz, int volumePercent);
     static QString edgeSpeechConfigMessage();
     static QString edgeSsmlRequestMessage(const QString &ssml);
     static QString edgeDateToString();
@@ -375,7 +388,7 @@ private:
     // The engine is part of the key (not just for tidiness): Google's cache entries always carry
     // an empty voice name, so without the engine tag a Bing voice preference named identically to
     // some Google language code could theoretically collide with it.
-    static QString audioCacheKey(QOnlineTranslator::Engine engine, QOnlineTranslator::Language lang, const QString &voiceName, const QString &chunkText);
+    static QString audioCacheKey(QOnlineTranslator::Engine engine, QOnlineTranslator::Language lang, const QString &voiceName, const QString &chunkText, const QString &prosodyKey = QString());
     void cacheAudio(const QString &key, QTemporaryFile *file);
     void purgeExpiredAudio();
 
@@ -411,6 +424,10 @@ private:
     QList<QMediaContent> m_media;
     QString m_errorString;
     TtsError m_error = NoError;
+
+    int m_prosodyRatePercent = 0;
+    int m_prosodyPitchHz = 0;
+    int m_prosodyVolumePercent = 0;
 };
 
 #endif // QONLINETTS_H

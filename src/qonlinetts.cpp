@@ -51,6 +51,12 @@ const QString kEdgeWssUrl = QStringLiteral(
 // values get rejected with a 403 during the WebSocket handshake.
 const QString kEdgeChromiumMajorVersion = QStringLiteral("143");
 const QString kEdgeSecMsGecVersion = QStringLiteral("1-143.0.3650.75");
+
+QString formatSignedNumber(int value, int decimals, const QString &unit)
+{
+    const QString sign = value >= 0 ? QStringLiteral("+") : QString(); // QString::number already emits '-'
+    return sign + QString::number(static_cast<double>(value), 'f', decimals) + unit;
+}
 }
 
 const QMap<QOnlineTts::Emotion, QString> QOnlineTts::s_emotionCodes = {
@@ -95,6 +101,13 @@ const QMap<QOnlineTranslator::Language, QList<QLocale::Country>> QOnlineTts::s_v
 QOnlineTts::QOnlineTts(QObject *parent)
     : QObject(parent)
 {
+}
+
+void QOnlineTts::setProsody(int ratePercent, int pitchHz, int volumePercent)
+{
+    m_prosodyRatePercent = ratePercent;
+    m_prosodyPitchHz = pitchHz;
+    m_prosodyVolumePercent = volumePercent;
 }
 
 void QOnlineTts::generateUrls(const QString &text, QOnlineTranslator::Engine engine, QOnlineTranslator::Language lang, Voice voice, Emotion emotion)
@@ -458,23 +471,16 @@ QVector<QString> QOnlineTts::splitTextForBing(const QString &text)
     return chunks;
 }
 
-QByteArray QOnlineTts::buildBingSsml(const QString &text, const BingVoiceData &voice)
+QByteArray QOnlineTts::buildBingSsml(const QString &text, const BingVoiceData &voice, int ratePercent)
 {
-    // Deliberately mirrors the exact SSML shape Bing's own web frontend sends - double-quoted
-    // attributes, and the voice name stuffed into a nonstandard `xml:name` attribute alongside an
-    // *empty* standard `name` attribute - rather than "corrected" spec-compliant SSML with the
-    // voice in `name` directly. That corrected version reliably got a 500 back from the tfettts
-    // endpoint (confirmed via Charles Proxy against a real browser request); whatever Bing's
-    // server does when it sees a populated `name` attribute, it doesn't like it, so don't give it
-    // one - just replicate the working request byte-for-byte instead of guessing why.
     static const QString ssmlTemplate = QStringLiteral(
         "<speak version=\"1.0\" xml:lang=\"%1\">"
         "<voice xml:lang=\"%1\" xml:gender=\"%2\" name=\"\" xml:name=\"%3\">"
-        "<prosody rate=\"+0.00%\">%4</prosody>"
+        "<prosody rate=\"%4\">%5</prosody>"
         "</voice>"
         "</speak>");
 
-    return ssmlTemplate.arg(voice.locale, voice.gender, voice.name, text.toHtmlEscaped()).toUtf8();
+    return ssmlTemplate.arg(voice.locale, voice.gender, voice.name, formatSignedNumber(ratePercent, 2, QStringLiteral("%")), text.toHtmlEscaped()).toUtf8();
 }
 
 // Scrapes the IG/IID/key/token quadruplet that the Bing Translator webpage embeds in its own
@@ -618,39 +624,35 @@ QByteArray QOnlineTts::postBingSpeech(const QByteArray &requestBody)
 void QOnlineTts::generateBingUrls(const QString &text, QOnlineTranslator::Language lang)
 {
     BingVoiceData voice;
-    if (lang == QOnlineTranslator::Auto || !catalogVoiceData(lang, voice)) {
+    if (lang == QOnlineTranslator::Auto || !bingVoiceData(lang, voice)) {
         setError(UnsupportedLanguage, tr("Selected language %1 is not supported for %2").arg(QMetaEnum::fromType<QOnlineTranslator::Language>().valueToKey(lang), QMetaEnum::fromType<QOnlineTranslator::Engine>().valueToKey(QOnlineTranslator::Bing)));
         return;
     }
 
     const QVector<QString> chunks = splitTextForBing(text);
+    const QString prosodyKey = QStringLiteral("r%1").arg(m_prosodyRatePercent);
 
     purgeExpiredAudio();
 
-    // Skip the credentials fetch entirely if every chunk is already cached for this exact voice
-    // (e.g. the user just hit "speak" again on text they already played with the same voice) - no
-    // need to talk to Bing at all.
-    const bool allCached = std::all_of(chunks.cbegin(), chunks.cend(), [this, lang, &voice](const QString &chunk) {
-        return m_audioCache.contains(audioCacheKey(QOnlineTranslator::Bing, lang, voice.name, chunk));
+    const bool allCached = std::all_of(chunks.cbegin(), chunks.cend(), [this, lang, &voice, &prosodyKey](const QString &chunk) {
+        return m_audioCache.contains(audioCacheKey(QOnlineTranslator::Bing, lang, voice.name, chunk, prosodyKey));
     });
     if (!allCached && !ensureBingCredentials())
-        return; // setError() was already called
+        return;
 
     if (!m_networkManager)
         m_networkManager = new QNetworkAccessManager(this);
 
     for (const QString &chunk : chunks) {
-        const QString cacheKey = audioCacheKey(QOnlineTranslator::Bing, lang, voice.name, chunk);
+        const QString cacheKey = audioCacheKey(QOnlineTranslator::Bing, lang, voice.name, chunk, prosodyKey);
         QTemporaryFile *file = m_audioCache.value(cacheKey).file;
 
         if (!file) {
-            const QByteArray ssml = buildBingSsml(chunk, voice);
+            const QByteArray ssml = buildBingSsml(chunk, voice, m_prosodyRatePercent);
             const QByteArray audio = postBingSpeech(ssml);
             if (audio.isEmpty())
-                return; // setError() was already called by postBingSpeech()
+                return;
 
-            // Parented to `this` - see the m_audioCache comment in the header for the
-            // lifetime implications of that.
             file = new QTemporaryFile(this);
             file->setFileTemplate(audioCacheDirPath() + QStringLiteral("/bing-tts-XXXXXX.mp3"));
             if (!file->open() || file->write(audio) != audio.size()) {
@@ -743,20 +745,22 @@ QString QOnlineTts::edgeSsmlRequestMessage(const QString &ssml)
         .arg(edgeGenerateConnectId(), edgeDateToString(), ssml);
 }
 
-QString QOnlineTts::buildEdgeSsml(const QString &escapedText, const BingVoiceData &voice)
+QString QOnlineTts::buildEdgeSsml(const QString &escapedText, const BingVoiceData &voice, int ratePercent, int pitchHz, int volumePercent)
 {
-    // "escapedText" is assumed already XML-escaped by the caller (splitTextForEdge()) - not
-    // escaped again here, matching edge-tts's own mkssml(), which never double-escapes.
-    const QString shortName = voice.name.mid(voice.locale.size() + 1); // "en-US-AriaNeural" -> "AriaNeural"
+    const QString shortName = voice.name.mid(voice.locale.size() + 1);
 
     static const QString ssmlTemplate = QStringLiteral(
         "<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='%1'>"
         "<voice name='Microsoft Server Speech Text to Speech Voice (%1, %2)'>"
-        "<prosody pitch='+0Hz' rate='+0%' volume='+0%'>%3</prosody>"
+        "<prosody pitch='%3' rate='%4' volume='%5'>%6</prosody>"
         "</voice>"
         "</speak>");
 
-    return ssmlTemplate.arg(voice.locale, shortName, escapedText);
+    return ssmlTemplate.arg(voice.locale, shortName,
+                             formatSignedNumber(pitchHz, 0, QStringLiteral("Hz")),
+                             formatSignedNumber(ratePercent, 0, QStringLiteral("%")),
+                             formatSignedNumber(volumePercent, 0, QStringLiteral("%")),
+                             escapedText);
 }
 
 // Splits an already XML-escaped, UTF-8 encoded byte string into chunks no longer than
@@ -931,24 +935,25 @@ QByteArray QOnlineTts::postEdgeSpeech(const QString &ssml)
 void QOnlineTts::generateEdgeUrls(const QString &text, QOnlineTranslator::Language lang)
 {
     BingVoiceData voice;
-    if (lang == QOnlineTranslator::Auto || !catalogVoiceData(lang, voice)) {
+    if (lang == QOnlineTranslator::Auto || !bingVoiceData(lang, voice)) {
         setError(UnsupportedLanguage, tr("Selected language %1 is not supported for %2").arg(QMetaEnum::fromType<QOnlineTranslator::Language>().valueToKey(lang), QMetaEnum::fromType<QOnlineTranslator::Engine>().valueToKey(QOnlineTranslator::Edge)));
         return;
     }
 
     const QVector<QString> chunks = splitTextForEdge(text);
+    const QString prosodyKey = QStringLiteral("r%1p%2v%3").arg(m_prosodyRatePercent).arg(m_prosodyPitchHz).arg(m_prosodyVolumePercent);
 
     purgeExpiredAudio();
 
     for (const QString &escapedChunk : chunks) {
-        const QString cacheKey = audioCacheKey(QOnlineTranslator::Edge, lang, voice.name, escapedChunk);
+        const QString cacheKey = audioCacheKey(QOnlineTranslator::Edge, lang, voice.name, escapedChunk, prosodyKey);
         QTemporaryFile *file = m_audioCache.value(cacheKey).file;
 
         if (!file) {
-            const QString ssml = buildEdgeSsml(escapedChunk, voice);
+            const QString ssml = buildEdgeSsml(escapedChunk, voice, m_prosodyRatePercent, m_prosodyPitchHz, m_prosodyVolumePercent);
             const QByteArray audio = postEdgeSpeech(ssml);
             if (audio.isEmpty())
-                return; // setError() was already called by postEdgeSpeech()
+                return;
 
             file = new QTemporaryFile(this);
             file->setFileTemplate(audioCacheDirPath() + QStringLiteral("/edge-tts-XXXXXX.mp3"));
@@ -1001,10 +1006,11 @@ QByteArray QOnlineTts::postGoogleSpeech(const QUrl &apiUrl)
     return data;
 }
 
-QString QOnlineTts::audioCacheKey(QOnlineTranslator::Engine engine, QOnlineTranslator::Language lang, const QString &voiceName, const QString &chunkText)
+QString QOnlineTts::audioCacheKey(QOnlineTranslator::Engine engine, QOnlineTranslator::Language lang, const QString &voiceName, const QString &chunkText, const QString &prosodyKey)
 {
-    return QString::number(engine) + QLatin1Char('|') + QString::number(lang) + QLatin1Char('|') + voiceName + QLatin1Char('|') + chunkText;
+    return QString::number(engine) + QLatin1Char('|') + QString::number(lang) + QLatin1Char('|') + voiceName + QLatin1Char('|') + prosodyKey + QLatin1Char('|') + chunkText;
 }
+
 
 void QOnlineTts::cacheAudio(const QString &key, QTemporaryFile *file)
 {
